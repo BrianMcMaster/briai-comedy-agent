@@ -1,0 +1,373 @@
+/* Reset and base styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Header */
+header {
+    text-align: center;
+    margin-bottom: 30px;
+    color: white;
+}
+
+header h1 {
+    font-size: 2.5rem;
+    margin-bottom: 10px;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+
+header p {
+    font-size: 1.1rem;
+    opacity: 0.9;
+}
+
+/* Main content */
+main {
+    flex: 1;
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+}
+
+/* Connection panel */
+.connection-panel {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 30px;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.status {
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status.disconnected {
+    background: #fee;
+    color: #c53030;
+    border: 1px solid #fed7d7;
+}
+
+.status.connecting {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+}
+
+.status.connected {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.status.reconnecting {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+    animation: pulse 1.5s infinite;
+}
+
+.status.error {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.controls {
+    display: flex;
+    gap: 10px;
+}
+
+/* Audio status indicator */
+.audio-status {
+    padding: 6px 12px;
+    border-radius: 15px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.audio-status.idle {
+    background: #e9ecef;
+    color: #6c757d;
+}
+
+.audio-status.listening {
+    background: #cce5ff;
+    color: #0066cc;
+    animation: pulse 1s infinite;
+}
+
+.audio-status.processing,
+.audio-status.generating {
+    background: #fff3cd;
+    color: #856404;
+    animation: pulse 0.8s infinite;
+}
+
+.audio-status.speaking {
+    background: #d1ecf1;
+    color: #0c5460;
+    animation: pulse 1.2s infinite;
+}
+
+.audio-status.error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* Error message panel */
+.error-message {
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    border-radius: 6px;
+    padding: 15px;
+    margin-bottom: 20px;
+    color: #721c24;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 15px;
+}
+
+.error-message .error-text {
+    flex: 1;
+    font-weight: 500;
+}
+
+.btn.retry {
+    background: #dc3545;
+    color: white;
+    padding: 8px 16px;
+    font-size: 0.8rem;
+}
+
+.btn.retry:hover:not(:disabled) {
+    background: #c82333;
+}
+
+/* Buttons */
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn.primary {
+    background: #667eea;
+    color: white;
+}
+
+.btn.primary:hover:not(:disabled) {
+    background: #5a6fd8;
+    transform: translateY(-1px);
+}
+
+.btn.secondary {
+    background: #6c757d;
+    color: white;
+}
+
+.btn.secondary:hover:not(:disabled) {
+    background: #5a6268;
+    transform: translateY(-1px);
+}
+
+.btn.small {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    margin-top: 10px;
+}
+
+/* Audio controls */
+.audio-controls {
+    margin-bottom: 30px;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 1px solid #e9ecef;
+}
+
+.volume-indicator label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: 600;
+    color: #495057;
+}
+
+.volume-bar {
+    width: 100%;
+    height: 8px;
+    background: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.volume-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
+    width: 0%;
+    transition: width 0.1s ease;
+    border-radius: 4px;
+}
+
+/* Transcription and debug panels */
+.transcription-panel,
+.debug-panel {
+    margin-bottom: 20px;
+}
+
+.transcription-panel h3,
+.debug-panel h3 {
+    margin-bottom: 15px;
+    color: #495057;
+    font-size: 1.2rem;
+}
+
+.transcription-log,
+.debug-log {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 15px;
+    height: 200px;
+    overflow-y: auto;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.transcription-log {
+    background: #fff;
+    border-color: #dee2e6;
+}
+
+.debug-log {
+    background: #f1f3f4;
+    color: #495057;
+}
+
+.placeholder {
+    color: #6c757d;
+    font-style: italic;
+}
+
+.log-entry {
+    margin-bottom: 8px;
+    padding: 4px 0;
+}
+
+.log-entry.user {
+    color: #0066cc;
+}
+
+.log-entry.assistant {
+    color: #28a745;
+}
+
+.log-entry.system {
+    color: #6c757d;
+    font-size: 0.8rem;
+}
+
+.log-entry.error {
+    color: #dc3545;
+    font-weight: 600;
+}
+
+.timestamp {
+    color: #6c757d;
+    font-size: 0.8rem;
+    margin-right: 8px;
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    margin-top: 20px;
+    color: white;
+    opacity: 0.8;
+    font-size: 0.9rem;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+    
+    .connection-panel {
+        flex-direction: column;
+        gap: 15px;
+        text-align: center;
+    }
+    
+    .controls {
+        justify-content: center;
+    }
+    
+    header h1 {
+        font-size: 2rem;
+    }
+    
+    main {
+        padding: 20px;
+    }
+}
+
+/* Animation for connecting state */
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.status.connecting {
+    animation: pulse 1.5s infinite;
+}

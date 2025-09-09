@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BriAI - Comedy Bot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎭 BriAI Comedy Agent</h1>
+            <p>Real-time AI comedy conversations</p>
+        </header>
+
+        <main>
+            <div class="connection-panel">
+                <div class="status-indicator">
+                    <span id="connection-status" class="status disconnected">Disconnected</span>
+                    <span id="audio-status" class="audio-status idle">Ready</span>
+                </div>
+                
+                <div class="controls">
+                    <button id="connect-btn" class="btn primary">Start Conversation</button>
+                    <button id="disconnect-btn" class="btn secondary" disabled>Stop Conversation</button>
+                </div>
+            </div>
+
+            <div id="error-message" class="error-message" style="display: none;">
+                <span class="error-text">Error message will appear here</span>
+                <button id="retry-btn" class="btn small retry" style="display: none;">Retry Connection</button>
+            </div>
+
+            <div class="audio-controls">
+                <div class="volume-indicator">
+                    <label>Microphone Level:</label>
+                    <div class="volume-bar">
+                        <div id="volume-level" class="volume-fill"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="transcription-panel">
+                <h3>Live Transcription</h3>
+                <div id="transcription-log" class="transcription-log">
+                    <p class="placeholder">Transcription will appear here when conversation starts...</p>
+                </div>
+                <button id="clear-log-btn" class="btn small">Clear Log</button>
+            </div>
+
+            <div class="debug-panel">
+                <h3>Connection Debug</h3>
+                <div id="debug-log" class="debug-log">
+                    <p class="placeholder">Debug information will appear here...</p>
+                </div>
+                <button id="clear-debug-btn" class="btn small">Clear Debug</button>
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by OpenAI Realtime API with WebRTC</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
