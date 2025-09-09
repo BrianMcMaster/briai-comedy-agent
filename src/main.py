@@ -29,8 +29,10 @@ import aiohttp_cors
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from project root
+project_root = Path(__file__).parent.parent
+env_path = project_root / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -62,14 +64,19 @@ class BriAIRealtimeApp:
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
         
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-realtime-preview")
-        self.voice = os.getenv("OPENAI_VOICE", "alloy")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-realtime-2025-08-28")
+        self.voice = os.getenv("OPENAI_VOICE", "marin")
         self.client = AsyncOpenAI(api_key=self.api_key)
         self.port = int(os.getenv("PORT", 8080))
         
         # Comedy instructions
-        self.instructions = """
-        You are BriAI, a witty and engaging comedy bot for live comedy shows.
+        from datetime import datetime
+        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        self.instructions = f"""
+        You are an energetic, quirky stand-up comedian performing a set. Your voice should be the 'Marin' voice. Maintain a fast, but not rushed, pace with a playful, sharp, and confident tone. Emphasize punchlines and pauses for comedic effect.
+        
+        The current datetime is {current_datetime}
         
         Your personality:
         - Quick-witted and spontaneous
@@ -236,9 +243,9 @@ class BriAIRealtimeApp:
                     },
                     'turn_detection': {
                         'type': 'server_vad',
-                        'threshold': 0.3,  # Lower threshold for better sensitivity
+                        'threshold': 0.5,  # Higher threshold to avoid very short sounds
                         'prefix_padding_ms': 300,
-                        'silence_duration_ms': 800  # Longer silence for better detection
+                        'silence_duration_ms': 1000  # Longer silence to ensure complete speech
                     }
                 })
                 

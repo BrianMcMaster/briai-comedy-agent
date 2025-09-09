@@ -67,3 +67,5 @@ htmlcov/
 .cache/
 
 .ruff_cache
+
+.ash

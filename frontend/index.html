@@ -14,6 +14,10 @@
         </header>
 
         <main>
+            <div class="briai-image-section">
+                <img src="/static/BriAI.jpg" alt="BriAI Comedy Agent" class="briai-image">
+            </div>
+
             <div class="connection-panel">
                 <div class="status-indicator">
                     <span id="connection-status" class="status disconnected">Disconnected</span>
@@ -29,15 +33,6 @@
             <div id="error-message" class="error-message" style="display: none;">
                 <span class="error-text">Error message will appear here</span>
                 <button id="retry-btn" class="btn small retry" style="display: none;">Retry Connection</button>
-            </div>
-
-            <div class="audio-controls">
-                <div class="volume-indicator">
-                    <label>Microphone Level:</label>
-                    <div class="volume-bar">
-                        <div id="volume-level" class="volume-fill"></div>
-                    </div>
-                </div>
             </div>
 
             <div class="transcription-panel">

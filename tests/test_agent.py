@@ -40,14 +40,14 @@ def test_agent_initialization():
     """
     print("Testing agent initialization...")
     
-    # Mock API key for testing
-    os.environ["OPENAI_API_KEY"] = "sk-test-key"
+    # Mock API token for testing
+    os.environ["OPENAI_API_KEY"] = "test-token-placeholder"  # pragma: allowlist secret
     
     try:
         app = BriAIRealtimeApp()
         
         # Verify essential properties
-        assert app.api_key == "sk-test-key"
+        assert app.api_key == "test-token-placeholder"
         assert app.model is not None
         assert app.instructions is not None
         assert "comedy" in app.instructions.lower()
@@ -79,8 +79,8 @@ def test_environment_setup():
     try:
         # Check required environment variables
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key or api_key == "sk-test-key":
-            print("⚠️  OPENAI_API_KEY not set (using test key)")
+        if not api_key or api_key == "test-token-placeholder":
+            print("⚠️  OPENAI_API_KEY not set (using test token)")
         else:
             print("✅ OPENAI_API_KEY configured")
         

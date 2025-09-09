@@ -1,5 +1,7 @@
 # 🎭 BriAI Comedy Agent
 
+![BriAI](docs/BriAI.jpg)
+
 A real-time AI comedy bot using OpenAI's Realtime API for live voice interactions. Built with Python 3.12, aiohttp, and WebRTC for seamless real-time conversations.
 
 ## ✨ Features
@@ -27,7 +29,7 @@ cd briai-comedy-agent
 ```bash
 cp .env.example .env
 # Edit .env and add your OpenAI API key:
-# OPENAI_API_KEY=sk-your-openai-api-key-here
+# OPENAI_API_KEY=your-openai-api-token-here  # pragma: allowlist secret
 ```
 
 ### 3. Build and Run
@@ -146,6 +148,21 @@ Core dependencies (automatically installed):
 - `aiohttp>=3.12.0` - Async HTTP server framework
 - `websockets>=14.0` - WebSocket implementation
 - `python-dotenv>=1.0.1` - Environment variable management
+
+## 📋 Pricing Estimates
+
+*Per 1M audio tokens* - [OpenAI Pricing](https://platform.openai.com/docs/pricing#audio-tokens)
+
+| Model | Input | Cached Input | Output |
+|-------|-------|--------------|--------|
+| **gpt-realtime** | $32.00 | $0.40 | $64.00 |
+| **gpt-4o-realtime-preview** | $40.00 | $2.50 | $80.00 |
+| **gpt-4o-mini-realtime-preview** | $10.00 | $0.30 | $20.00 |
+| **gpt-audio** | $40.00 | - | $80.00 |
+| **gpt-4o-audio-preview** | $40.00 | - | $80.00 |
+| **gpt-4o-mini-audio-preview** | $10.00 | - | $20.00 |
+
+> **Note**: BriAI uses `gpt-realtime` by default. For cost optimization, consider switching to `gpt-4o-mini-realtime-preview` in your `.env` file.
 
 ## 🔒 Security Notes
 

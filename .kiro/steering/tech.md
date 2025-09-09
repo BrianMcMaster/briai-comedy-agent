@@ -44,7 +44,7 @@ docker build -t briai-local .       # Build local container
 docker run -p 8080:8080 briai-local # Run locally on port 8080
 
 # Environment setup
-export OPENAI_API_KEY="your-key"    # Set OpenAI API key
+export OPENAI_API_KEY="your-api-key-here"    # Set OpenAI API key
 
 # Test realtime connection
 # Open browser to http://localhost:8080 for WebRTC connection

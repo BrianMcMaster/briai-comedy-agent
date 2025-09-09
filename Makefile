@@ -91,7 +91,7 @@ test-docker:
 	make build
 	@echo "2. Testing container startup..."
 	docker run --rm \
-		-e OPENAI_API_KEY=sk-test-key-for-validation-only \
+		-e OPENAI_API_KEY=test-validation-token \  # pragma: allowlist secret
 		--entrypoint="" \
 		briai-local \
 		python -c "import src.main; print('✅ Import successful')"
@@ -102,7 +102,7 @@ shell:
 	@echo "🐚 Opening shell in BriAI container..."
 	docker exec -it briai-comedy-agent /bin/bash || \
 	docker run --rm -it \
-		-e OPENAI_API_KEY=sk-test \
+		-e OPENAI_API_KEY=test-token \  # pragma: allowlist secret
 		--entrypoint=/bin/bash \
 		briai-local
 

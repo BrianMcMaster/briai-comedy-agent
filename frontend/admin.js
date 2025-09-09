@@ -24,8 +24,8 @@ let tokenHistory = [];
 
 // OpenAI Realtime API pricing (per 1M tokens)
 const PRICING = {
-    input: 5.00,   // $5.00 per 1M input tokens
-    output: 20.00  // $20.00 per 1M output tokens
+    input: 32.00,   // $32.00 per 1M input tokens
+    output: 64.00  // $64.00 per 1M output tokens
 };
 
 // Initialize admin panel
@@ -225,8 +225,25 @@ function log(message, type = 'info') {
 
 function clearLogs() {
     const logContainer = document.getElementById('debugLogs');
-    logContainer.innerHTML = '<div class="log-entry"><span class="log-timestamp">[' + 
-        new Date().toLocaleTimeString() + ']</span><span class="log-info"> Logs cleared</span></div>';
+    
+    // Create elements safely to prevent XSS
+    const logEntry = document.createElement('div');
+    logEntry.className = 'log-entry';
+    
+    const timestamp = document.createElement('span');
+    timestamp.className = 'log-timestamp';
+    timestamp.textContent = '[' + new Date().toLocaleTimeString() + ']';
+    
+    const message = document.createElement('span');
+    message.className = 'log-info';
+    message.textContent = ' Logs cleared';
+    
+    logEntry.appendChild(timestamp);
+    logEntry.appendChild(message);
+    
+    logContainer.innerHTML = '';
+    logContainer.appendChild(logEntry);
+    
     log('Debug logs cleared', 'info');
 }
 
@@ -264,13 +281,18 @@ async function checkSystemHealth() {
         }
         
         // Test API connectivity
-        const apiResponse = await fetch('/api/session');
+        const apiResponse = await fetch('/api/session', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
         if (apiResponse.ok) {
             updateStatus('api-status', '✅', 'success');
             log('API connectivity: OK', 'success');
         } else {
             updateStatus('api-status', '❌', 'error');
-            log('API connectivity: ERROR', 'error');
+            log(`API connectivity: ERROR (${apiResponse.status})`, 'error');
         }
         
         // Test WebSocket
@@ -523,7 +545,8 @@ async function testAudioSystem() {
 function testWebSocketConnection() {
     log('Testing WebSocket connection...', 'info');
     
-    const wsUrl = `ws://${window.location.host}/ws/realtime`;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/realtime`;
     websocket = new WebSocket(wsUrl);
     
     websocket.onopen = function() {
@@ -569,25 +592,38 @@ function testWebSocketConnection() {
 
 function updateConnectionStatus(status) {
     const statusElement = document.getElementById('connection-status');
-    statusElement.innerHTML = `<span class="status-indicator status-${status}">${status.charAt(0).toUpperCase() + status.slice(1)}</span>`;
+    
+    // Create elements safely to prevent XSS
+    const span = document.createElement('span');
+    span.className = `status-indicator status-${status}`;
+    span.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+    
+    statusElement.innerHTML = '';
+    statusElement.appendChild(span);
 }
 
 async function testAllEndpoints() {
     log('Testing all API endpoints...', 'info');
     
     const endpoints = [
-        { url: '/api/session/status', name: 'Session Status' },
-        { url: '/api/session', name: 'Create Session', method: 'POST' }
+        { url: '/api/session/status', name: 'Session Status', method: 'GET' },
+        { url: '/api/session', name: 'Create Session', method: 'POST', headers: { 'Content-Type': 'application/json' } }
     ];
     
     for (const endpoint of endpoints) {
         try {
-            const response = await fetch(endpoint.url, {
+            const fetchOptions = {
                 method: endpoint.method || 'GET'
-            });
+            };
+            
+            if (endpoint.headers) {
+                fetchOptions.headers = endpoint.headers;
+            }
+            
+            const response = await fetch(endpoint.url, fetchOptions);
             
             if (response.ok) {
-                log(`${endpoint.name}: OK`, 'success');
+                log(`${endpoint.name}: OK (${response.status})`, 'success');
             } else {
                 log(`${endpoint.name}: Failed (${response.status})`, 'error');
             }
@@ -621,7 +657,8 @@ async function loadConfiguration() {
             document.getElementById('config-model').textContent = config.model || 'Unknown';
             document.getElementById('config-voice').textContent = config.voice || 'Unknown';
             document.getElementById('config-port').textContent = window.location.port || '80';
-            document.getElementById('config-ws-url').textContent = `ws://${window.location.host}/ws/realtime`;
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            document.getElementById('config-ws-url').textContent = `${protocol}//${window.location.host}/ws/realtime`;
             
             log('Configuration loaded successfully', 'success');
         } else {
@@ -943,7 +980,11 @@ async function testAudioProcessing() {
         
         const resultsDiv = document.getElementById('audio-processing-results');
         if (resultsDiv) {
-            resultsDiv.innerHTML = '<div class="alert alert-success">Audio processing test passed - Web Audio API is working correctly</div>';
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-success';
+            alertDiv.textContent = 'Audio processing test passed - Web Audio API is working correctly';
+            resultsDiv.innerHTML = '';
+            resultsDiv.appendChild(alertDiv);
         }
         
     } catch (error) {
@@ -951,7 +992,11 @@ async function testAudioProcessing() {
         
         const resultsDiv = document.getElementById('audio-processing-results');
         if (resultsDiv) {
-            resultsDiv.innerHTML = `<div class="alert alert-danger">Audio processing test failed: ${error.message}</div>`;
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-danger';
+            alertDiv.textContent = `Audio processing test failed: ${error.message}`;
+            resultsDiv.innerHTML = '';
+            resultsDiv.appendChild(alertDiv);
         }
     }
 }
@@ -1013,7 +1058,8 @@ async function testRealtimeAPI() {
     
     try {
         // Test the realtime API by creating a WebSocket connection
-        const wsUrl = `ws://${window.location.host}/ws/realtime`;
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/realtime`;
         const testWs = new WebSocket(wsUrl);
         
         testWs.onopen = function() {
@@ -1081,7 +1127,11 @@ function testReconnection() {
             
             const resultsDiv = document.getElementById('reconnection-results');
             if (resultsDiv) {
-                resultsDiv.innerHTML = '<div class="alert alert-danger">Auto-reconnection test failed - max attempts reached</div>';
+                const alertDiv = document.createElement('div');
+                alertDiv.className = 'alert alert-danger';
+                alertDiv.textContent = 'Auto-reconnection test failed - max attempts reached';
+                resultsDiv.innerHTML = '';
+                resultsDiv.appendChild(alertDiv);
             }
             return;
         }
@@ -1096,7 +1146,11 @@ function testReconnection() {
                 
                 const resultsDiv = document.getElementById('reconnection-results');
                 if (resultsDiv) {
-                    resultsDiv.innerHTML = `<div class="alert alert-success">Auto-reconnection test passed - reconnected after ${reconnectAttempts} attempts</div>`;
+                    const alertDiv = document.createElement('div');
+                    alertDiv.className = 'alert alert-success';
+                    alertDiv.textContent = `Auto-reconnection test passed - reconnected after ${reconnectAttempts} attempts`;
+                    resultsDiv.innerHTML = '';
+                    resultsDiv.appendChild(alertDiv);
                 }
             } else {
                 log('Reconnection failed, retrying...', 'warning');
@@ -1123,7 +1177,11 @@ function testMaxRetries() {
             
             const resultsDiv = document.getElementById('reconnection-results');
             if (resultsDiv) {
-                resultsDiv.innerHTML = '<div class="alert alert-success">Max retries test passed - properly handled maximum attempts</div>';
+                const alertDiv = document.createElement('div');
+                alertDiv.className = 'alert alert-success';
+                alertDiv.textContent = 'Max retries test passed - properly handled maximum attempts';
+                resultsDiv.innerHTML = '';
+                resultsDiv.appendChild(alertDiv);
             }
         } else {
             setTimeout(failedAttempt, 500);
@@ -1168,7 +1226,8 @@ async function runFullDiagnostic() {
     
     try {
         // Clear previous alerts
-        document.getElementById('system-alerts').innerHTML = '';
+        const alertsContainer = document.getElementById('system-alerts');
+        alertsContainer.innerHTML = '';
         
         // Run all tests in sequence
         log('Step 1/6: Checking system health...', 'info');
