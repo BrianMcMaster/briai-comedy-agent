@@ -258,19 +258,21 @@ class BriAIRealtimeApp:
             async with self.client.beta.realtime.connect(model=self.model) as connection:
                 logger.info("OpenAI realtime connection established")
                 
-                # Configure session for audio
+                # Configure session for audio with optimized settings
                 await connection.session.update(session={
                     'modalities': ['text', 'audio'],
                     'voice': self.voice,
                     'instructions': self.instructions,
+                    'input_audio_format': 'pcm16',  # Explicitly specify PCM16 format
+                    'output_audio_format': 'pcm16',  # Ensure consistent output format
                     'input_audio_transcription': {
                         'model': 'whisper-1'
                     },
                     'turn_detection': {
                         'type': 'server_vad',
-                        'threshold': 0.6,  # Higher threshold to avoid very short sounds
-                        'prefix_padding_ms': 300,
-                        'silence_duration_ms': 1000  # Longer silence to ensure complete speech
+                        'threshold': 0.5,  # Slightly lower threshold for better responsiveness
+                        'prefix_padding_ms': 200,  # Reduced padding to minimize delay
+                        'silence_duration_ms': 800  # Shorter silence duration for more natural conversation
                     }
                 })
                 
@@ -355,12 +357,22 @@ class BriAIRealtimeApp:
                         if event_type == 'input_audio_buffer.append':
                             audio_data = data.get('audio', '')
                             if audio_data:
-                                logger.info(f"📨 Received audio data: {len(audio_data)} bytes")
+                                logger.debug(f"📨 Received audio data: {len(audio_data)} bytes")
                                 
-                                # Convert base64 to bytes for OpenAI
+                                # Validate base64 audio data
                                 try:
                                     audio_bytes = base64.b64decode(audio_data)
-                                    logger.info(f"📤 Decoded audio: {len(audio_bytes)} raw bytes")
+                                    
+                                    # Validate audio format (should be PCM16, even number of bytes)
+                                    if len(audio_bytes) % 2 != 0:
+                                        logger.warning(f"⚠️ Invalid audio data length: {len(audio_bytes)} bytes (not PCM16)")
+                                        continue
+                                    
+                                    # Check for reasonable audio chunk size (avoid tiny or huge chunks)
+                                    if len(audio_bytes) < 64 or len(audio_bytes) > 8192:
+                                        logger.debug(f"⚠️ Unusual audio chunk size: {len(audio_bytes)} bytes")
+                                    
+                                    logger.debug(f"📤 Decoded audio: {len(audio_bytes)} raw bytes")
                                     
                                     # Send to OpenAI as base64 (the SDK handles the conversion)
                                     await connection.send({
@@ -368,8 +380,10 @@ class BriAIRealtimeApp:
                                         'audio': audio_data  # Keep as base64
                                     })
                                     
-                                    logger.info("✅ Forwarded audio to OpenAI successfully")
+                                    logger.debug("✅ Forwarded audio to OpenAI successfully")
                                     
+                                except base64.binascii.Error as b64_error:
+                                    logger.error(f"❌ Base64 decode error: {b64_error}")
                                 except Exception as audio_error:
                                     logger.error(f"❌ Audio processing error: {audio_error}")
                             else:

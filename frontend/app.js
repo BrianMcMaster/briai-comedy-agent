@@ -325,9 +325,10 @@ class BriAIClient {
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    autoGainControl: true,
+                    autoGainControl: false, // Disable AGC to prevent audio artifacts
                     sampleRate: 24000, // OpenAI Realtime API expects 24kHz
-                    channelCount: 1
+                    channelCount: 1,
+                    latency: 0.01 // Request low latency (10ms)
                 }
             });
             this.logDebug('Microphone access granted');
@@ -338,9 +339,10 @@ class BriAIClient {
 
     async setupAudioAnalysis() {
         try {
-            // Use modern AudioContext (webkitAudioContext is deprecated)
+            // Use modern AudioContext with optimal settings for real-time processing
             this.audioContext = new AudioContext({
-                sampleRate: 24000
+                sampleRate: 24000,
+                latencyHint: 'interactive' // Optimize for low latency
             });
 
             // Resume audio context if it's suspended (required by some browsers)
@@ -352,9 +354,9 @@ class BriAIClient {
             const source = this.audioContext.createMediaStreamSource(this.mediaStream);
             this.analyser = this.audioContext.createAnalyser();
 
-            // Configure analyser for better volume detection
-            this.analyser.fftSize = 1024; // Larger FFT for better resolution
-            this.analyser.smoothingTimeConstant = 0.3; // Smooth out rapid changes
+            // Configure analyser for better volume detection with reduced artifacts
+            this.analyser.fftSize = 512; // Smaller FFT for lower latency
+            this.analyser.smoothingTimeConstant = 0.1; // Less smoothing for more responsive detection
             this.analyser.minDecibels = -90;
             this.analyser.maxDecibels = -10;
 
@@ -363,7 +365,7 @@ class BriAIClient {
             const bufferLength = this.analyser.fftSize;
             this.dataArray = new Uint8Array(bufferLength);
 
-            // Set up audio processing for sending to backend using modern AudioWorklet
+            // Set up audio processing for sending to backend
             await this.setupAudioProcessor(source);
 
             this.startVolumeMonitoring();
@@ -386,8 +388,8 @@ class BriAIClient {
 
     setupFallbackAudioProcessor(source) {
         try {
-            // Fallback using ScriptProcessorNode (deprecated but widely supported)
-            const bufferSize = 4096;
+            // Use smaller buffer size for lower latency and reduced artifacts
+            const bufferSize = 1024; // Reduced from 4096 to minimize latency
             const processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
 
             processor.addEventListener('audioprocess', (event) => {
@@ -397,42 +399,56 @@ class BriAIClient {
 
                 const inputData = event.inputBuffer.getChannelData(0);
 
-                // Check if there's actual audio data
-                let hasAudio = false;
+                // Apply a simple high-pass filter to reduce low-frequency noise
+                const filteredData = new Float32Array(inputData.length);
+                let prevSample = 0;
+                const alpha = 0.95; // High-pass filter coefficient
+                
                 for (let i = 0; i < inputData.length; i++) {
-                    if (Math.abs(inputData[i]) > 0.001) {
+                    filteredData[i] = alpha * (filteredData[i - 1] || 0) + alpha * (inputData[i] - prevSample);
+                    prevSample = inputData[i];
+                }
+
+                // Check if there's actual audio data with better threshold
+                let hasAudio = false;
+                let rms = 0;
+                for (let i = 0; i < filteredData.length; i++) {
+                    rms += filteredData[i] * filteredData[i];
+                    if (Math.abs(filteredData[i]) > 0.005) { // Increased threshold to reduce noise
                         hasAudio = true;
-                        break;
                     }
                 }
+                rms = Math.sqrt(rms / filteredData.length);
 
-                // Convert Float32Array to Int16Array (PCM16)
-                const pcm16 = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    const sample = Math.max(-1, Math.min(1, inputData[i]));
-                    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-                }
+                // Only send audio if it meets quality thresholds
+                if (hasAudio && rms > 0.001) {
+                    // Convert Float32Array to Int16Array (PCM16) with proper clamping
+                    const pcm16 = new Int16Array(filteredData.length);
+                    for (let i = 0; i < filteredData.length; i++) {
+                        // Clamp values to prevent overflow and apply slight gain reduction
+                        const sample = Math.max(-0.95, Math.min(0.95, filteredData[i]));
+                        pcm16[i] = sample < 0 ? Math.floor(sample * 0x8000) : Math.floor(sample * 0x7FFF);
+                    }
 
-                // Convert to base64 for transmission
-                const audioData = this.arrayBufferToBase64(pcm16.buffer);
+                    // Convert to base64 for transmission
+                    const audioData = this.arrayBufferToBase64(pcm16.buffer);
 
-                // Send audio data to OpenAI via WebSocket
-                this.sendToOpenAI({
-                    type: 'input_audio_buffer.append',
-                    audio: audioData
-                });
+                    // Send audio data to OpenAI via WebSocket
+                    this.sendToOpenAI({
+                        type: 'input_audio_buffer.append',
+                        audio: audioData
+                    });
 
-                // Log only when we detect actual speech
-                if (hasAudio) {
-                    this.logDebug(`Sending audio data to OpenAI: ${audioData.length} bytes (speech detected)`);
+                    this.logDebug(`Sending filtered audio: ${audioData.length} bytes, RMS: ${rms.toFixed(4)}`);
                 }
             });
 
-            // Connect the processor
+            // Connect the processor (don't connect to destination to avoid feedback)
             source.connect(processor);
-            processor.connect(this.audioContext.destination);
+            // Remove connection to destination to prevent audio feedback
+            // processor.connect(this.audioContext.destination);
 
-            this.logDebug('Fallback ScriptProcessorNode setup complete - streaming to OpenAI');
+            this.logDebug('Optimized ScriptProcessorNode setup complete - streaming to OpenAI');
             this.isRecording = true;
 
         } catch (error) {
@@ -700,23 +716,48 @@ class BriAIClient {
                 await this.audioContext.resume();
             }
 
-            // Decode base64 audio data
+            // Decode base64 audio data with error handling
             const binaryString = atob(audioData);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) {
                 bytes[i] = binaryString.charCodeAt(i);
             }
 
-            // Convert to Float32Array for Web Audio API
-            const pcm16 = new Int16Array(bytes.buffer);
-            const float32 = new Float32Array(pcm16.length);
-            for (let i = 0; i < pcm16.length; i++) {
-                float32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
+            // Ensure we have valid audio data
+            if (bytes.length === 0 || bytes.length % 2 !== 0) {
+                this.logDebug('Invalid audio chunk received, skipping');
+                return;
             }
 
-            // Create audio buffer
+            // Convert to Float32Array for Web Audio API with improved conversion
+            const pcm16 = new Int16Array(bytes.buffer);
+            const float32 = new Float32Array(pcm16.length);
+            
+            for (let i = 0; i < pcm16.length; i++) {
+                // Improved PCM16 to Float32 conversion with proper normalization
+                if (pcm16[i] >= 0) {
+                    float32[i] = pcm16[i] / 32767.0;
+                } else {
+                    float32[i] = pcm16[i] / 32768.0;
+                }
+                
+                // Apply slight volume reduction to prevent clipping
+                float32[i] *= 0.9;
+            }
+
+            // Create audio buffer with proper sample rate
             const audioBuffer = this.audioContext.createBuffer(1, float32.length, 24000);
-            audioBuffer.getChannelData(0).set(float32);
+            const channelData = audioBuffer.getChannelData(0);
+            
+            // Apply a simple anti-aliasing filter to reduce artifacts
+            for (let i = 0; i < float32.length; i++) {
+                if (i === 0) {
+                    channelData[i] = float32[i];
+                } else {
+                    // Simple low-pass filter to smooth audio
+                    channelData[i] = 0.7 * float32[i] + 0.3 * channelData[i - 1];
+                }
+            }
 
             // Add to queue for sequential playback
             this.audioQueue.push({
@@ -746,11 +787,23 @@ class BriAIClient {
         const audioBuffer = audioItem.buffer;
 
         const source = this.audioContext.createBufferSource();
+        const gainNode = this.audioContext.createGain();
+        
         source.buffer = audioBuffer;
-        source.connect(this.audioContext.destination);
+        
+        // Add gain control and connect through gain node
+        source.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+        
+        // Set initial volume (can be adjusted if needed)
+        gainNode.gain.value = 0.8;
 
         // Calculate when to start this chunk for seamless playback
         const startTime = Math.max(this.audioContext.currentTime, this.currentAudioTime);
+
+        // Add small overlap to prevent gaps between chunks
+        const overlap = 0.001; // 1ms overlap
+        const adjustedStartTime = Math.max(startTime - overlap, this.audioContext.currentTime);
 
         // Schedule the next chunk to play when this one ends
         source.onended = () => {
@@ -758,11 +811,17 @@ class BriAIClient {
             this.playNextAudioChunk();
         };
 
-        // Start playback
-        source.start(startTime);
-        this.currentAudioTime = startTime + audioBuffer.duration;
+        // Start playback with improved timing
+        try {
+            source.start(adjustedStartTime);
+            this.currentAudioTime = adjustedStartTime + audioBuffer.duration - overlap;
+        } catch (error) {
+            this.logError('Error starting audio playback', error);
+            // Try to continue with next chunk
+            this.playNextAudioChunk();
+        }
 
-        this.logDebug(`Playing audio chunk: ${audioBuffer.duration.toFixed(3)}s, queue: ${this.audioQueue.length}`);
+        this.logDebug(`Playing audio chunk: ${audioBuffer.duration.toFixed(3)}s, queue: ${this.audioQueue.length}, start: ${adjustedStartTime.toFixed(3)}`);
     }
 
     arrayBufferToBase64(buffer) {
