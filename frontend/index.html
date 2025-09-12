@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BriAI - Comedy Bot</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
     <div class="container">
         <header>
@@ -14,19 +16,17 @@
         </header>
 
         <main>
-            <div class="briai-image-section">
-                <img src="/static/BriAI.jpg" alt="BriAI Comedy Agent" class="briai-image">
-            </div>
-
-            <div class="connection-panel">
-                <div class="status-indicator">
-                    <span id="connection-status" class="status disconnected">Disconnected</span>
-                    <span id="audio-status" class="audio-status idle">Ready</span>
+            <div class="main-content-panel">
+                <div class="briai-image-section">
+                    <img src="/static/BriAI.jpg" alt="BriAI Comedy Agent" class="briai-image">
                 </div>
                 
-                <div class="controls">
-                    <button id="connect-btn" class="btn primary">Start Conversation</button>
-                    <button id="disconnect-btn" class="btn secondary" disabled>Stop Conversation</button>
+                <div class="transcription-panel">
+                    <h3>Live Transcription</h3>
+                    <div id="transcription-log" class="transcription-log">
+                        <p class="placeholder">Transcription will appear here when conversation starts...</p>
+                    </div>
+                    <button id="clear-log-btn" class="btn small">Clear Log</button>
                 </div>
             </div>
 
@@ -35,21 +35,22 @@
                 <button id="retry-btn" class="btn small retry" style="display: none;">Retry Connection</button>
             </div>
 
-            <div class="transcription-panel">
-                <h3>Live Transcription</h3>
-                <div id="transcription-log" class="transcription-log">
-                    <p class="placeholder">Transcription will appear here when conversation starts...</p>
+            <div class="controls-panel">
+                <div class="status-indicator">
+                    <span id="connection-status" class="status disconnected">Disconnected</span>
+                    <span id="audio-status" class="audio-status idle">Ready</span>
                 </div>
-                <button id="clear-log-btn" class="btn small">Clear Log</button>
+                <div class="controls">
+                    <button id="connect-btn" class="btn primary mini">Start</button>
+                    <button id="disconnect-btn" class="btn secondary mini" disabled>Stop</button>
+                </div>
             </div>
 
-            <div class="debug-panel">
-                <h3>Connection Debug</h3>
-                <div id="debug-log" class="debug-log">
-                    <p class="placeholder">Debug information will appear here...</p>
-                </div>
-                <button id="clear-debug-btn" class="btn small">Clear Debug</button>
+            <div class="admin-link-panel">
+                <p>For debugging and advanced features, visit the <a href="/admin" target="_blank"
+                        class="admin-link">Admin Panel</a></p>
             </div>
+
         </main>
 
         <footer>
@@ -59,4 +60,5 @@
 
     <script src="/static/app.js"></script>
 </body>
+
 </html>

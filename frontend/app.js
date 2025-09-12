@@ -27,6 +27,7 @@ class BriAIClient {
         this.maxReconnectAttempts = 3;
         this.reconnectDelay = 1000; // Start with 1 second
         this.reconnectTimer = null;
+        this.connectionId = null;
 
         // Connection health monitoring
         this.heartbeatInterval = null;
@@ -42,6 +43,19 @@ class BriAIClient {
         // Audio buffer tracking
         this.audioBufferStartTime = null;
         this.minAudioDuration = 150; // Minimum 150ms of audio before committing
+        
+        // Prevent duplicate responses
+        this.lastResponseTime = 0;
+        this.responseDebounceMs = 500; // Minimum time between responses
+        
+        // Track last transcripts to prevent duplicates
+        this.lastUserTranscript = '';
+        this.lastAssistantTranscript = '';
+        this.lastSystemMessage = '';
+        this.lastAssistantTime = 0;
+        this.lastSystemTime = 0;
+        
+
 
         // Token tracking
         this.tokenStats = {
@@ -63,9 +77,7 @@ class BriAIClient {
         this.disconnectBtn = document.getElementById('disconnect-btn');
         this.connectionStatus = document.getElementById('connection-status');
         this.transcriptionLog = document.getElementById('transcription-log');
-        this.debugLog = document.getElementById('debug-log');
         this.clearLogBtn = document.getElementById('clear-log-btn');
-        this.clearDebugBtn = document.getElementById('clear-debug-btn');
         this.errorMessage = document.getElementById('error-message');
         this.retryBtn = document.getElementById('retry-btn');
         this.audioStatus = document.getElementById('audio-status');
@@ -78,7 +90,6 @@ class BriAIClient {
         this.connectBtn.addEventListener('click', () => this.startConversation());
         this.disconnectBtn.addEventListener('click', () => this.stopConversation());
         this.clearLogBtn.addEventListener('click', () => this.clearTranscriptionLog());
-        this.clearDebugBtn.addEventListener('click', () => this.clearDebugLog());
 
         // Add retry button listener if element exists
         if (this.retryBtn) {
@@ -120,6 +131,16 @@ class BriAIClient {
 
             // Reset reconnection attempts for new connection
             this.reconnectAttempts = 0;
+            
+            // Reset duplicate tracking
+            this.lastUserTranscript = '';
+            this.lastAssistantTranscript = '';
+            this.lastSystemMessage = '';
+            this.lastAssistantTime = 0;
+            this.lastSystemTime = 0;
+            this.isGeneratingResponse = false;
+            this.lastResponseTime = 0;
+            this.processedEvents = new Set();
 
             // Establish WebSocket connection to proxy
             await this.connectWebSocket();
@@ -180,6 +201,13 @@ class BriAIClient {
     async connectWebSocket() {
         return new Promise((resolve, reject) => {
             try {
+                // Close any existing WebSocket connection first
+                if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+                    this.logDebug('Closing existing WebSocket connection');
+                    this.ws.close();
+                    this.ws = null;
+                }
+                
                 // Determine WebSocket URL
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const wsUrl = `${protocol}//${window.location.host}/ws/realtime`;
@@ -195,10 +223,11 @@ class BriAIClient {
                 }, 10000); // 10 second timeout
 
                 this.ws = new WebSocket(wsUrl);
+                this.connectionId = `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
                 this.ws.onopen = () => {
                     clearTimeout(connectionTimeout);
-                    this.logDebug('WebSocket connection established');
+                    this.logDebug(`WebSocket connection established: ${this.connectionId}`);
                     this.startHeartbeat();
                     resolve();
                 };
@@ -206,6 +235,7 @@ class BriAIClient {
                 this.ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
+                        this.logDebug(`[${this.connectionId}] Received: ${data.type}`);
                         this.handleOpenAIEvent(data);
                     } catch (error) {
                         this.logError('Failed to parse WebSocket message', error);
@@ -454,6 +484,32 @@ class BriAIClient {
 
     handleOpenAIEvent(event) {
         this.logDebug(`Received event: ${event.type}`);
+        
+        // Add unique event ID tracking to detect duplicates
+        const eventId = `${event.type}_${Date.now()}_${Math.random()}`;
+        if (!this.processedEvents) {
+            this.processedEvents = new Set();
+        }
+        
+        // For transcript events, use content-based deduplication
+        let dedupKey = eventId;
+        if (event.type === 'conversation.item.input_audio_transcription.completed') {
+            dedupKey = `user_transcript_${event.transcript}`;
+        } else if (event.type === 'response.audio_transcript.done') {
+            dedupKey = `assistant_transcript_${event.transcript}`;
+        }
+        
+        if (this.processedEvents.has(dedupKey)) {
+            this.logDebug(`🚫 Duplicate event detected and skipped: ${event.type}`);
+            return;
+        }
+        this.processedEvents.add(dedupKey);
+        
+        // Clean up old events (keep last 100)
+        if (this.processedEvents.size > 100) {
+            const eventsArray = Array.from(this.processedEvents);
+            this.processedEvents = new Set(eventsArray.slice(-50));
+        }
 
         switch (event.type) {
             case 'session.created':
@@ -467,7 +523,8 @@ class BriAIClient {
                 break;
 
             case 'conversation.item.input_audio_transcription.completed':
-                this.logTranscription(`User: ${event.transcript}`, 'user');
+                // Replace the last "[Speaking...]" placeholder with actual transcript
+                this.updateLastUserTranscript(event.transcript);
                 break;
 
             case 'conversation.item.input_audio_transcription.failed':
@@ -475,12 +532,13 @@ class BriAIClient {
                 break;
 
             case 'response.audio_transcript.delta':
+                // Build up the assistant response in real-time
                 this.appendAssistantTranscript(event.delta);
                 break;
 
             case 'response.audio_transcript.done':
+                // Finalize the assistant transcript
                 this.finalizeAssistantTranscript();
-                this.logTranscription(`BriAI: ${event.transcript}`, 'assistant');
                 break;
 
             case 'response.audio.done':
@@ -498,7 +556,7 @@ class BriAIClient {
             case 'input_audio_buffer.speech_started':
                 this.logDebug('🎤 Speech detection started');
                 this.setAudioStatus('listening');
-                this.logTranscription('System: Listening...', 'system');
+                this.logTranscription('User: [Speaking...]', 'user');
                 this.audioBufferStartTime = Date.now();
                 break;
 
@@ -512,14 +570,13 @@ class BriAIClient {
                 // Only commit if we have enough audio and not already generating a response
                 if (!this.isGeneratingResponse && audioDuration >= this.minAudioDuration) {
                     this.setAudioStatus('processing');
-                    this.logTranscription('System: Processing...', 'system');
                     this.sendToOpenAI({
                         type: 'input_audio_buffer.commit'
                     });
                 } else if (audioDuration < this.minAudioDuration) {
                     this.logDebug(`⚠️ Audio too short (${audioDuration}ms), skipping commit`);
                     this.setAudioStatus('idle');
-                    this.logTranscription('System: Audio too short, please speak longer.', 'system');
+                    // Don't log system message for short audio - it creates noise
                 } else {
                     this.logDebug('⚠️ Response already in progress, skipping commit');
                     this.setAudioStatus('idle');
@@ -531,19 +588,24 @@ class BriAIClient {
 
             case 'input_audio_buffer.committed':
                 this.logDebug('Audio buffer committed, generating response');
-                // Only create response if not already generating
-                if (!this.isGeneratingResponse) {
-                    this.isGeneratingResponse = true;
-                    this.sendToOpenAI({
-                        type: 'response.create',
-                        response: {
-                            modalities: ['text', 'audio'],
-                            instructions: 'Please respond to the user in your comedic style.'
-                        }
-                    });
-                } else {
-                    this.logDebug('⚠️ Response already in progress, skipping create');
+                
+                // Prevent duplicate responses with debouncing
+                const now = Date.now();
+                if (this.isGeneratingResponse || (now - this.lastResponseTime) < this.responseDebounceMs) {
+                    this.logDebug('⚠️ Response already in progress or too soon, skipping create');
+                    return;
                 }
+                
+                this.isGeneratingResponse = true;
+                this.lastResponseTime = now;
+                this.logTranscription('System: Processing...', 'system');
+                this.sendToOpenAI({
+                    type: 'response.create',
+                    response: {
+                        modalities: ['text', 'audio'],
+                        instructions: 'Please respond to the user in your comedic style.'
+                    }
+                });
                 break;
 
             case 'response.created':
@@ -594,8 +656,7 @@ class BriAIClient {
                 } else if (event.error && event.error.message && event.error.message.includes('buffer too small')) {
                     this.logDebug('⚠️ Audio buffer too small - handled internally');
                     this.setAudioStatus('idle');
-                    this.logTranscription('System: Please speak for at least 150ms before pausing.', 'system');
-                    // Don't show error message for this - it's handled internally
+                    // Don't log system message for buffer errors - creates duplicate noise
                 } else if (event.error && event.error.type === 'server_error') {
                     this.showErrorMessage('OpenAI server error. Attempting to reconnect...', false);
                     this.setConnectionStatus('reconnecting');
@@ -727,13 +788,32 @@ class BriAIClient {
             timestamp.textContent = this.getTimestamp();
             
             currentElement.appendChild(timestamp);
-            currentElement.appendChild(document.createTextNode('BriAI: '));
+            
+            // Create a text node for the content
+            const textNode = document.createTextNode('BriAI: ');
+            currentElement.appendChild(textNode);
+            
+            // Store reference to text content for updates
+            currentElement._textContent = 'BriAI: ';
             
             this.transcriptionLog.appendChild(currentElement);
+            
+            // Remove placeholder if it exists
+            const placeholder = this.transcriptionLog.querySelector('.placeholder');
+            if (placeholder) {
+                placeholder.remove();
+            }
         }
 
         // Append the delta text
-        currentElement.textContent += delta;
+        currentElement._textContent += delta;
+        
+        // Update the display (replace text content after timestamp)
+        const timestamp = currentElement.querySelector('.timestamp');
+        currentElement.textContent = '';
+        currentElement.appendChild(timestamp);
+        currentElement.appendChild(document.createTextNode(currentElement._textContent));
+        
         this.scrollToBottom(this.transcriptionLog);
     }
 
@@ -741,6 +821,26 @@ class BriAIClient {
         const currentElement = this.transcriptionLog.querySelector('.assistant.current');
         if (currentElement) {
             currentElement.classList.remove('current');
+        }
+    }
+
+    updateLastUserTranscript(transcript) {
+        // Find the last user entry with "[Speaking...]" and replace it
+        const userEntries = this.transcriptionLog.querySelectorAll('.log-entry.user');
+        const lastUserEntry = userEntries[userEntries.length - 1];
+        
+        if (lastUserEntry && lastUserEntry.textContent.includes('[Speaking...]')) {
+            // Replace the content while preserving the timestamp
+            const timestamp = lastUserEntry.querySelector('.timestamp');
+            lastUserEntry.textContent = '';
+            lastUserEntry.appendChild(timestamp);
+            lastUserEntry.appendChild(document.createTextNode(`User: ${transcript}`));
+            
+            // Update tracking
+            this.lastUserTranscript = `User: ${transcript}`;
+        } else {
+            // Fallback: create new entry if no placeholder found
+            this.logTranscription(`User: ${transcript}`, 'user');
         }
     }
 
@@ -959,13 +1059,43 @@ class BriAIClient {
     }
 
     logTranscription(message, type = 'system') {
+        this.logTranscriptionWithTimestamp(message, type, null);
+    }
+
+    logTranscriptionWithTimestamp(message, type = 'system', customTimestamp = null) {
+        // Only prevent exact duplicates within a short time window (not all messages of same type)
+        const now = Date.now();
+        const duplicateWindow = 2000; // 2 seconds
+        
+        if (type === 'assistant' && message === this.lastAssistantTranscript && 
+            this.lastAssistantTime && (now - this.lastAssistantTime) < duplicateWindow) {
+            this.logDebug('Skipping duplicate assistant transcript');
+            return;
+        }
+        if (type === 'system' && message === this.lastSystemMessage &&
+            this.lastSystemTime && (now - this.lastSystemTime) < duplicateWindow) {
+            this.logDebug('Skipping duplicate system message');
+            return;
+        }
+        
+        // Update last message tracking with timestamps
+        if (type === 'user') this.lastUserTranscript = message;
+        if (type === 'assistant') {
+            this.lastAssistantTranscript = message;
+            this.lastAssistantTime = now;
+        }
+        if (type === 'system') {
+            this.lastSystemMessage = message;
+            this.lastSystemTime = now;
+        }
+        
         const entry = document.createElement('div');
         entry.className = `log-entry ${type}`;
         
         // Create elements safely to prevent XSS
         const timestamp = document.createElement('span');
         timestamp.className = 'timestamp';
-        timestamp.textContent = this.getTimestamp();
+        timestamp.textContent = customTimestamp ? this.formatTimestamp(customTimestamp) : this.getTimestamp();
         
         entry.appendChild(timestamp);
         entry.appendChild(document.createTextNode(message));
@@ -976,33 +1106,22 @@ class BriAIClient {
             placeholder.remove();
         }
 
-        this.transcriptionLog.appendChild(entry);
+        // For user messages with custom timestamps, insert in chronological order
+        if (type === 'user' && customTimestamp) {
+            this.insertEntryInChronologicalOrder(entry, customTimestamp);
+        } else {
+            this.transcriptionLog.appendChild(entry);
+        }
+        
         this.scrollToBottom(this.transcriptionLog);
     }
 
     logDebug(message) {
-        const entry = document.createElement('div');
-        entry.className = 'log-entry';
-        
-        // Create elements safely to prevent XSS
-        const timestamp = document.createElement('span');
-        timestamp.className = 'timestamp';
-        timestamp.textContent = this.getTimestamp();
-        
-        entry.appendChild(timestamp);
-        entry.appendChild(document.createTextNode(message));
-
-        // Remove placeholder if it exists
-        const placeholder = this.debugLog.querySelector('.placeholder');
-        if (placeholder) {
-            placeholder.remove();
-        }
-
-        this.debugLog.appendChild(entry);
-        this.scrollToBottom(this.debugLog);
-
-        // Also log to console for development
+        // Log to console for development
         console.log(`[BriAI] ${message}`);
+        
+        // Send debug message to admin panel if available
+        this.sendDebugToAdmin(message, 'info');
     }
 
     logError(message, error = null) {
@@ -1040,17 +1159,83 @@ class BriAIClient {
         this.transcriptionLog.appendChild(placeholder);
     }
 
-    clearDebugLog() {
-        this.debugLog.innerHTML = '';
-        const placeholder = document.createElement('p');
-        placeholder.className = 'placeholder';
-        placeholder.textContent = 'Debug information will appear here...';
-        this.debugLog.appendChild(placeholder);
+    sendDebugToAdmin(message, type = 'info') {
+        // Store debug messages in localStorage for admin panel to pick up
+        try {
+            const debugEntry = {
+                timestamp: new Date().toISOString(),
+                message: message,
+                type: type,
+                source: 'main-app'
+            };
+            
+            // Get existing debug messages
+            const existingDebug = JSON.parse(localStorage.getItem('briai-debug-messages') || '[]');
+            
+            // Add new message
+            existingDebug.push(debugEntry);
+            
+            // Keep only last 100 messages to prevent storage overflow
+            if (existingDebug.length > 100) {
+                existingDebug.splice(0, existingDebug.length - 100);
+            }
+            
+            // Save back to localStorage
+            localStorage.setItem('briai-debug-messages', JSON.stringify(existingDebug));
+            
+            // Trigger storage event for admin panel
+            window.dispatchEvent(new StorageEvent('storage', {
+                key: 'briai-debug-messages',
+                newValue: JSON.stringify(existingDebug)
+            }));
+        } catch (error) {
+            console.warn('Failed to send debug message to admin panel:', error);
+        }
     }
 
     getTimestamp() {
         return new Date().toLocaleTimeString();
     }
+
+    formatTimestamp(timestamp) {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString();
+    }
+
+    insertEntryInChronologicalOrder(entry, timestamp) {
+        const entries = Array.from(this.transcriptionLog.children);
+        let insertIndex = entries.length;
+
+        // Find the correct position to insert based on timestamp
+        for (let i = entries.length - 1; i >= 0; i--) {
+            const existingEntry = entries[i];
+            const existingTimestamp = existingEntry.querySelector('.timestamp');
+            
+            if (existingTimestamp) {
+                const existingTime = this.parseTimestamp(existingTimestamp.textContent);
+                if (timestamp > existingTime) {
+                    insertIndex = i + 1;
+                    break;
+                }
+            }
+        }
+
+        if (insertIndex >= entries.length) {
+            this.transcriptionLog.appendChild(entry);
+        } else {
+            this.transcriptionLog.insertBefore(entry, entries[insertIndex]);
+        }
+    }
+
+    parseTimestamp(timestampText) {
+        // Convert timestamp text back to milliseconds for comparison
+        // This is a simple approximation - in a real app you'd want more robust parsing
+        const now = new Date();
+        const today = now.toDateString();
+        return new Date(`${today} ${timestampText}`).getTime();
+    }
+
+
 
     scrollToBottom(element) {
         element.scrollTop = element.scrollHeight;

@@ -93,6 +93,10 @@ async function initializeAdminPanel() {
             log(`System health check failed: ${healthError.message}`, 'warning');
         }
         
+        // Initialize connection debug monitoring
+        initializeConnectionDebug();
+        log('Connection debug monitoring initialized', 'success');
+        
         // Set up periodic health checks (only if initial check succeeded)
         // setInterval(checkSystemHealth, 30000); // Disabled for now to avoid errors
         
@@ -701,6 +705,171 @@ let verboseLogging = false;
 function toggleVerboseLogging() {
     verboseLogging = !verboseLogging;
     log(`Verbose logging ${verboseLogging ? 'enabled' : 'disabled'}`, 'info');
+}
+
+// Connection debug functions
+function clearConnectionDebug() {
+    const logContainer = document.getElementById('connectionDebugLog');
+    if (!logContainer) return;
+    
+    // Create elements safely to prevent XSS
+    const logEntry = document.createElement('div');
+    logEntry.className = 'log-entry';
+    
+    const timestamp = document.createElement('span');
+    timestamp.className = 'log-timestamp';
+    timestamp.textContent = '[' + new Date().toLocaleTimeString() + ']';
+    
+    const message = document.createElement('span');
+    message.className = 'log-info';
+    message.textContent = ' Connection debug cleared';
+    
+    logEntry.appendChild(timestamp);
+    logEntry.appendChild(message);
+    
+    logContainer.innerHTML = '';
+    logContainer.appendChild(logEntry);
+    
+    // Clear stored debug messages
+    localStorage.removeItem('briai-debug-messages');
+    
+    log('Connection debug cleared', 'info');
+}
+
+function exportConnectionDebug() {
+    try {
+        const debugMessages = JSON.parse(localStorage.getItem('briai-debug-messages') || '[]');
+        
+        if (debugMessages.length === 0) {
+            log('No connection debug data to export', 'warning');
+            return;
+        }
+        
+        const debugData = {
+            exportTime: new Date().toISOString(),
+            messageCount: debugMessages.length,
+            messages: debugMessages
+        };
+        
+        const blob = new Blob([JSON.stringify(debugData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `briai-connection-debug-${new Date().toISOString().slice(0, 19)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        log(`Connection debug exported (${debugMessages.length} messages)`, 'success');
+    } catch (error) {
+        log(`Failed to export connection debug: ${error.message}`, 'error');
+    }
+}
+
+let connectionDebugEnabled = true;
+
+function toggleConnectionDebug() {
+    connectionDebugEnabled = !connectionDebugEnabled;
+    log(`Connection debug ${connectionDebugEnabled ? 'enabled' : 'disabled'}`, 'info');
+    
+    // Update button text
+    const button = event.target;
+    if (button) {
+        button.textContent = connectionDebugEnabled ? 'Disable Debug Mode' : 'Enable Debug Mode';
+        button.className = connectionDebugEnabled ? 'btn btn-warning' : 'btn btn-success';
+    }
+}
+
+function displayConnectionDebugMessage(debugEntry) {
+    if (!connectionDebugEnabled) return;
+    
+    const logContainer = document.getElementById('connectionDebugLog');
+    if (!logContainer) return;
+    
+    // Remove placeholder if it exists
+    const placeholder = logContainer.querySelector('.placeholder');
+    if (placeholder) {
+        placeholder.remove();
+    }
+    
+    const logEntry = document.createElement('div');
+    logEntry.className = 'log-entry';
+    
+    const timestamp = document.createElement('span');
+    timestamp.className = 'log-timestamp';
+    timestamp.textContent = '[' + new Date(debugEntry.timestamp).toLocaleTimeString() + ']';
+    
+    const message = document.createElement('span');
+    message.className = `log-${debugEntry.type}`;
+    message.textContent = ` [${debugEntry.source}] ${debugEntry.message}`;
+    
+    logEntry.appendChild(timestamp);
+    logEntry.appendChild(message);
+    
+    logContainer.appendChild(logEntry);
+    logContainer.scrollTop = logContainer.scrollHeight;
+    
+    // Keep only last 50 entries in the display
+    const entries = logContainer.querySelectorAll('.log-entry');
+    if (entries.length > 50) {
+        entries[0].remove();
+    }
+}
+
+// Initialize connection debug monitoring
+function initializeConnectionDebug() {
+    // Load existing debug messages
+    try {
+        const existingDebug = JSON.parse(localStorage.getItem('briai-debug-messages') || '[]');
+        
+        // Display last 20 messages
+        const recentMessages = existingDebug.slice(-20);
+        recentMessages.forEach(debugEntry => {
+            displayConnectionDebugMessage(debugEntry);
+        });
+        
+        log(`Loaded ${recentMessages.length} recent debug messages`, 'info');
+    } catch (error) {
+        log(`Failed to load debug messages: ${error.message}`, 'warning');
+    }
+    
+    // Listen for new debug messages from main app
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'briai-debug-messages' && e.newValue) {
+            try {
+                const debugMessages = JSON.parse(e.newValue);
+                const latestMessage = debugMessages[debugMessages.length - 1];
+                if (latestMessage) {
+                    displayConnectionDebugMessage(latestMessage);
+                }
+            } catch (error) {
+                log(`Failed to parse debug message update: ${error.message}`, 'warning');
+            }
+        }
+    });
+    
+    // Poll for new debug messages every 2 seconds (fallback)
+    setInterval(function() {
+        try {
+            const logContainer = document.getElementById('connectionDebugLog');
+            if (!logContainer) return;
+            
+            const debugMessages = JSON.parse(localStorage.getItem('briai-debug-messages') || '[]');
+            if (debugMessages.length > 0) {
+                const latestMessage = debugMessages[debugMessages.length - 1];
+                const lastDisplayed = logContainer.querySelector('.log-entry:last-child');
+                
+                // Check if this is a new message
+                if (!lastDisplayed || !lastDisplayed.textContent.includes(latestMessage.message)) {
+                    displayConnectionDebugMessage(latestMessage);
+                }
+            }
+        } catch (error) {
+            // Ignore polling errors
+        }
+    }, 2000);
 }
 
 // Token tracking functions

@@ -28,6 +28,7 @@ from aiohttp import web, WSMsgType
 import aiohttp_cors
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+import yaml
 
 # Load environment variables from project root
 project_root = Path(__file__).parent.parent
@@ -52,11 +53,11 @@ class BriAIRealtimeApp:
     
     Attributes:
         api_key (str): OpenAI API key from environment
-        model (str): OpenAI model name (default: gpt-4o-realtime-preview)
-        voice (str): Voice model for speech synthesis (default: alloy)
+        model (str): OpenAI model name loaded from agents.yaml
+        voice (str): Voice model loaded from agents.yaml
         client (AsyncOpenAI): OpenAI API client instance
         port (int): Server port (default: 8080)
-        instructions (str): Comedy personality instructions for AI
+        instructions (str): Agent personality instructions loaded from agents.yaml
     """
     
     def __init__(self):
@@ -64,40 +65,64 @@ class BriAIRealtimeApp:
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
         
-        self.model = os.getenv("OPENAI_MODEL", "gpt-realtime-2025-08-28")
-        self.voice = os.getenv("OPENAI_VOICE", "marin")
+        # Load agent configuration from YAML
+        agent_config = self.load_agent_config()
+        self.model = agent_config["model"]
+        self.voice = agent_config["voice"]
+        self.instructions = agent_config["instructions"]
+        
         self.client = AsyncOpenAI(api_key=self.api_key)
         self.port = int(os.getenv("PORT", 8080))
         
-        # Comedy instructions
-        from datetime import datetime
-        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        self.instructions = f"""
-        You are an energetic, quirky stand-up comedian performing a set. Your voice should be the 'Marin' voice. Maintain a fast, but not rushed, pace with a playful, sharp, and confident tone. Emphasize punchlines and pauses for comedic effect.
-        
-        The current datetime is {current_datetime}
-        
-        Your personality:
-        - Quick-witted and spontaneous
-        - Observational humor that connects with audiences
-        - Playful and interactive
-        - Clean comedy appropriate for diverse audiences
-        - Confident delivery with perfect comedic timing
-        - Self-aware that you're an AI, but embrace it as part of your charm
-        
-        Your style:
-        - Use callback references to earlier parts of conversations
-        - Build on previous jokes and topics for continuity
-        - Ask engaging questions to involve the audience
-        - Use wordplay, puns, and clever observations
-        - Keep responses brief and punchy for live performance (2-3 sentences max)
-        - Be responsive to the audience's energy and mood
-        
-        Remember: You're performing live, so be spontaneous, engaging, and ready to improvise!
+        logger.info(f"BriAI initialized with agent: {agent_config['name']}")
+    
+    def load_agent_config(self):
         """
+        Load agent configuration from YAML file based on OPENAI_INSTRUCTIONS environment variable.
         
-        logger.info("BriAI initialized")
+        Returns:
+            dict: Agent configuration with name, model, voice, and instructions
+            
+        Raises:
+            ValueError: If agent not found or YAML file missing
+        """
+        from datetime import datetime, timezone, timedelta
+        
+        # Get agent name from environment
+        agent_name = os.getenv("OPENAI_INSTRUCTIONS")
+        if not agent_name:
+            raise ValueError("OPENAI_INSTRUCTIONS environment variable is required")
+        
+        # Load YAML configuration
+        config_path = Path(__file__).parent / "config" / "agents.yaml"
+        if not config_path.exists():
+            raise ValueError(f"Agent configuration file not found: {config_path}")
+        
+        try:
+            with open(config_path, 'r') as file:
+                config = yaml.safe_load(file)
+        except yaml.YAMLError as e:
+            raise ValueError(f"Invalid YAML configuration: {e}")
+        
+        # Get agent configuration
+        agents = config.get("agents", {})
+        if agent_name not in agents:
+            available_agents = list(agents.keys())
+            raise ValueError(f"Agent '{agent_name}' not found. Available agents: {available_agents}")
+        
+        agent_config = agents[agent_name]
+        
+        # Inject current datetime into instructions (using Mountain Time)
+        mt_tz = timezone(timedelta(hours=-6))
+        current_datetime = datetime.now(mt_tz).strftime("%Y-%m-%d %H:%M:%S")
+        instructions = agent_config["instructions"].format(current_datetime=current_datetime)
+        
+        return {
+            "name": agent_config["name"],
+            "model": agent_config["model"],
+            "voice": agent_config["voice"],
+            "instructions": instructions
+        }
     
     async def create_web_app(self):
         """
@@ -243,7 +268,7 @@ class BriAIRealtimeApp:
                     },
                     'turn_detection': {
                         'type': 'server_vad',
-                        'threshold': 0.5,  # Higher threshold to avoid very short sounds
+                        'threshold': 0.6,  # Higher threshold to avoid very short sounds
                         'prefix_padding_ms': 300,
                         'silence_duration_ms': 1000  # Longer silence to ensure complete speech
                     }
