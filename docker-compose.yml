@@ -1,5 +1,5 @@
 services:
-  briai-bot:
+  briai:
     build:
       context: .
       dockerfile: Dockerfile

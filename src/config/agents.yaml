@@ -3,7 +3,7 @@ agents:
   cmmc_auditor:
     name: cmmc_auditor
     model: gpt-realtime-2025-08-28
-    voice: cedar
+    voice: ash
     instructions: |
       The current datetime is {current_datetime}
 
@@ -72,7 +72,7 @@ agents:
   comedy_performer_sesame_street_after_dark:
     name: comedy_performer_sesame_street_after_dark
     model: gpt-realtime-2025-08-28
-    voice: cedar
+    voice: verse
     instructions: |
       Setting: A raunchy, underground late-night comedy venue—think Sesame Street, but if it grew up, got a bartending job, and started oversharing on podcasts.
 
