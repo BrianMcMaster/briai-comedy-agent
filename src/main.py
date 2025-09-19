@@ -64,7 +64,7 @@ class BriAIRealtimeApp:
         self.api_key = os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
-        
+
         # Load agent configuration from YAML
         agent_config = self.load_agent_config()
         self.model = agent_config["model"]
@@ -89,9 +89,16 @@ class BriAIRealtimeApp:
         from datetime import datetime, timezone, timedelta
         
         # Get agent name from environment
-        agent_name = os.getenv("OPENAI_INSTRUCTIONS")
-        if not agent_name:
-            raise ValueError("OPENAI_INSTRUCTIONS environment variable is required")
+        default_agent = "comedy_performer"
+        agent_name_env = os.getenv("OPENAI_INSTRUCTIONS")
+        if not agent_name_env:
+            logger.warning(
+                "OPENAI_INSTRUCTIONS not set. Falling back to default agent '%s'",
+                default_agent,
+            )
+            agent_name = default_agent
+        else:
+            agent_name = agent_name_env
         
         # Load YAML configuration
         config_path = Path(__file__).parent / "config" / "agents.yaml"

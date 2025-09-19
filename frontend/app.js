@@ -12,6 +12,8 @@ class BriAIClient {
         this.analyser = null;
         this.dataArray = null;
         this.animationId = null;
+        this.audioProcessor = null;
+        this.silentGainNode = null;
 
         // WebSocket connection
         this.ws = null;
@@ -377,60 +379,93 @@ class BriAIClient {
 
     async setupAudioProcessor(source) {
         try {
-            // Use ScriptProcessorNode directly (more reliable than AudioWorklet)
-            this.logDebug('Setting up ScriptProcessorNode for audio processing...');
-            this.setupFallbackAudioProcessor(source);
+            if (!this.audioContext || !this.audioContext.audioWorklet || typeof AudioWorkletNode === 'undefined') {
+                throw new Error('AudioWorklet not supported');
+            }
 
+            this.logDebug('Loading AudioWorklet processor for microphone capture...');
+            await this.audioContext.audioWorklet.addModule('/static/audio-worklet-processor.js');
+
+            const processor = new AudioWorkletNode(this.audioContext, 'microphone-processor', {
+                numberOfInputs: 1,
+                numberOfOutputs: 1,
+                outputChannelCount: [1]
+            });
+
+            processor.port.onmessage = (event) => {
+                if (!event.data) {
+                    return;
+                }
+
+                const floatData = event.data instanceof Float32Array
+                    ? event.data
+                    : new Float32Array(event.data);
+
+                this.processAudioChunk(floatData);
+            };
+
+            source.connect(processor);
+
+            const silentGain = this.audioContext.createGain();
+            silentGain.gain.value = 0;
+            processor.connect(silentGain);
+            silentGain.connect(this.audioContext.destination);
+
+            this.audioProcessor = processor;
+            this.silentGainNode = silentGain;
+
+            this.logDebug('AudioWorkletNode setup complete - streaming to OpenAI');
+            this.isRecording = true;
         } catch (error) {
-            this.logError('Failed to setup audio processor', error);
+            const message = error && error.message ? error.message : error;
+            this.logDebug(`AudioWorklet unavailable, falling back to ScriptProcessorNode: ${message}`);
+            this.setupFallbackAudioProcessor(source);
         }
     }
 
     setupFallbackAudioProcessor(source) {
         try {
-            // Use smaller buffer size for lower latency and reduced artifacts
             const bufferSize = 1024; // Reduced from 4096 to minimize latency
             const processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
 
             processor.addEventListener('audioprocess', (event) => {
-                if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-                    return;
-                }
-
                 const inputData = event.inputBuffer.getChannelData(0);
-
-                // Convert Float32Array to Int16Array (PCM16)
-                const pcm16 = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    const sample = Math.max(-1, Math.min(1, inputData[i]));
-                    pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-                }
-
-                // Convert to base64 for transmission
-                const audioData = this.arrayBufferToBase64(pcm16.buffer);
-
-                // Send audio data to OpenAI via WebSocket
-                this.sendToOpenAI({
-                    type: 'input_audio_buffer.append',
-                    audio: audioData
-                });
+                this.processAudioChunk(inputData);
             });
 
-            // Connect the processor - ScriptProcessorNode needs destination connection to work
             source.connect(processor);
 
-            // Create a gain node with zero volume to prevent feedback but allow processing
             const silentGain = this.audioContext.createGain();
             silentGain.gain.value = 0; // Mute the output
             processor.connect(silentGain);
             silentGain.connect(this.audioContext.destination);
 
-            this.logDebug('ScriptProcessorNode setup complete - streaming to OpenAI');
-            this.isRecording = true;
+            this.audioProcessor = processor;
+            this.silentGainNode = silentGain;
 
+            this.logDebug('ScriptProcessorNode fallback setup complete - streaming to OpenAI');
+            this.isRecording = true;
         } catch (error) {
             this.logError('Failed to setup fallback audio processor', error);
         }
+    }
+
+    processAudioChunk(float32Data) {
+        if (!this.isConnected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            return;
+        }
+
+        if (!float32Data || float32Data.length === 0) {
+            return;
+        }
+
+        const pcm16 = this.convertFloat32ToPCM16(float32Data);
+        const audioData = this.arrayBufferToBase64(pcm16.buffer);
+
+        this.sendToOpenAI({
+            type: 'input_audio_buffer.append',
+            audio: audioData
+        });
     }
 
     startVolumeMonitoring() {
@@ -762,6 +797,17 @@ class BriAIClient {
         this.currentAudioTime = startTime + audioBuffer.duration;
 
         this.logDebug(`Playing audio chunk: ${audioBuffer.duration.toFixed(3)}s, queue: ${this.audioQueue.length}`);
+    }
+
+    convertFloat32ToPCM16(float32Data) {
+        const pcm16 = new Int16Array(float32Data.length);
+
+        for (let i = 0; i < float32Data.length; i++) {
+            const sample = Math.max(-1, Math.min(1, float32Data[i]));
+            pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        }
+
+        return pcm16;
     }
 
     arrayBufferToBase64(buffer) {
@@ -1283,11 +1329,23 @@ class BriAIClient {
         // Disconnect audio processor
         if (this.audioProcessor) {
             try {
+                if (this.audioProcessor.port) {
+                    this.audioProcessor.port.onmessage = null;
+                }
                 this.audioProcessor.disconnect();
-                this.audioProcessor = null;
             } catch (error) {
                 this.logDebug('Error disconnecting audio processor:', error);
             }
+            this.audioProcessor = null;
+        }
+
+        if (this.silentGainNode) {
+            try {
+                this.silentGainNode.disconnect();
+            } catch (error) {
+                this.logDebug('Error disconnecting silent gain node:', error);
+            }
+            this.silentGainNode = null;
         }
 
         // Stop media stream tracks
