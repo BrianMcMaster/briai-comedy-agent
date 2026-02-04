@@ -42,6 +42,8 @@ def test_agent_initialization():
     
     # Mock API token for testing
     os.environ["OPENAI_API_KEY"] = "test-token-placeholder"  # pragma: allowlist secret
+    # Ensure test isolation from developer environment
+    os.environ.pop("OPENAI_INSTRUCTIONS", None)
     
     try:
         app = BriAIRealtimeApp()
