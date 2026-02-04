@@ -1,5 +1,5 @@
 # Official OpenAI Python SDK with realtime support
-openai>=2.15.0
+openai>=2.16.0
 
 # Web framework and server
 aiohttp>=3.13.3
@@ -20,6 +20,6 @@ pyyaml>=6.0.3
 # Development dependencies (optional)
 pytest>=9.0.2
 pytest-asyncio>=1.3.0
-black>=25.12.0
-ruff>=0.14.11
+black>=26.1.0
+ruff>=0.15.0
 mypy>=1.19.1

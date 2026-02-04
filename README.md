@@ -144,10 +144,13 @@ The project uses modern Python tooling:
 
 ### Dependencies
 Core dependencies (automatically installed):
-- `openai>=1.60.0` - OpenAI API client with Realtime support
-- `aiohttp>=3.12.0` - Async HTTP server framework
-- `websockets>=14.0` - WebSocket implementation
-- `python-dotenv>=1.0.1` - Environment variable management
+- `openai>=2.16.0` - OpenAI API client with Realtime support
+- `aiohttp>=3.13.3` - Async HTTP server framework
+- `aiohttp-cors>=0.8.1` - CORS support for aiohttp
+- `httpx>=0.28.1` - HTTP client for API calls
+- `websockets>=16.0` - WebSocket implementation
+- `python-dotenv>=1.2.1` - Environment variable management
+- `pyyaml>=6.0.3` - YAML configuration parsing
 
 ## 📋 Pricing Estimates
 
