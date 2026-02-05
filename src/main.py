@@ -279,7 +279,9 @@ class BriAIRealtimeApp:
                         'type': 'server_vad',
                         'threshold': 0.5,  # Slightly lower threshold for better responsiveness
                         'prefix_padding_ms': 200,  # Reduced padding to minimize delay
-                        'silence_duration_ms': 800  # Shorter silence duration for more natural conversation
+                        'silence_duration_ms': 800,  # Shorter silence duration for more natural conversation
+                        'create_response': True,
+                        'interrupt_response': True
                     }
                 })
                 

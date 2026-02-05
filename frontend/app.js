@@ -3,6 +3,810 @@
  * Simple interface for OpenAI Agents SDK realtime sessions
  */
 
+class RobotCompanion {
+    constructor({
+        stageEl,
+        canvasEl,
+        stateBadgeEl
+    }) {
+        this.stageEl = stageEl || null;
+        this.canvasEl = canvasEl || null;
+        this.stateBadgeEl = stateBadgeEl || null;
+        this.ctx = this.canvasEl ? this.canvasEl.getContext('2d') : null;
+
+        this.isAvailable = Boolean(this.stageEl && this.canvasEl && this.ctx);
+        if (!this.isAvailable) {
+            return;
+        }
+
+        this.prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        this.status = 'idle';
+        this.position = { x: 0, y: 0 }; // Stage coordinates for robot floor anchor
+        this.velocity = { x: 22, y: 8 };
+        this.dragVelocity = { x: 0, y: 0 };
+        this.facing = 1;
+        this.minSpeed = 14;
+        this.maxSpeed = 30;
+        this.energy = 0;
+        this.lookOffset = { x: 0, y: 0 };
+        this.robotSize = { width: 182, height: 252 };
+        this.stagePadding = 18;
+
+        this.lastFrameTime = 0;
+        this.nextDirectionChangeAt = 0;
+        this.animationFrameId = null;
+
+        this.walkPhase = 0;
+        this.gesturePhase = Math.random() * Math.PI * 2;
+        this.talkPhase = 0;
+        this.blinkAmount = 0;
+        this.blinkDirection = 0;
+        this.nextBlinkAt = performance.now() + 1200 + Math.random() * 2600;
+
+        this.isDragging = false;
+        this.dragPointerId = null;
+        this.dragOffset = { x: 0, y: 0 };
+        this.pointer = { x: 0, y: 0, active: false };
+        this.lastDragSample = null;
+
+        this.canvasMetrics = {
+            width: 0,
+            height: 0,
+            dpr: 0
+        };
+
+        this.boundResize = () => this.handleResize();
+        this.boundMotionPreferenceChange = () => this.handleMotionPreferenceChange();
+
+        this.initializeLayout();
+        this.bindEvents();
+        this.setAudioState('idle');
+        this.startAnimationLoop();
+    }
+
+    bindEvents() {
+        this.stageEl.addEventListener('pointerdown', (event) => this.handlePointerDown(event));
+        this.stageEl.addEventListener('pointermove', (event) => this.handlePointerMove(event));
+        this.stageEl.addEventListener('pointerup', (event) => this.handlePointerUp(event));
+        this.stageEl.addEventListener('pointercancel', (event) => this.handlePointerUp(event));
+        this.stageEl.addEventListener('pointerleave', () => {
+            this.pointer.active = false;
+        });
+        this.stageEl.addEventListener('dblclick', () => {
+            this.pickNewDirection(true);
+        });
+        window.addEventListener('resize', this.boundResize);
+
+        if (this.prefersReducedMotion.addEventListener) {
+            this.prefersReducedMotion.addEventListener('change', this.boundMotionPreferenceChange);
+        } else if (this.prefersReducedMotion.addListener) {
+            this.prefersReducedMotion.addListener(this.boundMotionPreferenceChange);
+        }
+    }
+
+    initializeLayout() {
+        this.resizeCanvasIfNeeded();
+        const stageWidth = Math.max(1, this.stageEl.clientWidth);
+        const stageHeight = Math.max(1, this.stageEl.clientHeight);
+
+        this.position.x = stageWidth / 2;
+        this.position.y = stageHeight - 22;
+        this.pickNewDirection(true);
+        this.keepInBounds();
+        this.draw(performance.now());
+    }
+
+    startAnimationLoop() {
+        if (this.animationFrameId) {
+            cancelAnimationFrame(this.animationFrameId);
+        }
+
+        const tick = (timestamp) => {
+            if (!this.lastFrameTime) {
+                this.lastFrameTime = timestamp;
+            }
+
+            const deltaSeconds = Math.min(0.05, (timestamp - this.lastFrameTime) / 1000);
+            this.lastFrameTime = timestamp;
+            this.update(deltaSeconds, timestamp);
+            this.animationFrameId = requestAnimationFrame(tick);
+        };
+
+        this.animationFrameId = requestAnimationFrame(tick);
+    }
+
+    getStageSize() {
+        return {
+            width: Math.max(1, this.stageEl.clientWidth),
+            height: Math.max(1, this.stageEl.clientHeight)
+        };
+    }
+
+    resizeCanvasIfNeeded() {
+        const { width, height } = this.getStageSize();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+        if (this.canvasMetrics.width === width && this.canvasMetrics.height === height && this.canvasMetrics.dpr === dpr) {
+            return;
+        }
+
+        this.canvasMetrics.width = width;
+        this.canvasMetrics.height = height;
+        this.canvasMetrics.dpr = dpr;
+
+        this.canvasEl.width = Math.max(1, Math.floor(width * dpr));
+        this.canvasEl.height = Math.max(1, Math.floor(height * dpr));
+        this.canvasEl.style.width = `${width}px`;
+        this.canvasEl.style.height = `${height}px`;
+        this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    handleResize() {
+        this.resizeCanvasIfNeeded();
+        this.keepInBounds(true);
+    }
+
+    handleMotionPreferenceChange() {
+        this.keepInBounds();
+        this.draw(performance.now());
+    }
+
+    update(deltaSeconds, timestamp) {
+        this.energy = Math.max(0, this.energy - (deltaSeconds * 2.8));
+        const speakingMotionActive = this.status === 'speaking' && !this.prefersReducedMotion.matches;
+
+        if (speakingMotionActive) {
+            this.talkPhase += deltaSeconds * 8;
+            this.gesturePhase += deltaSeconds * 1.8;
+            this.updateBlink(deltaSeconds, timestamp);
+        } else {
+            this.blinkAmount = 0;
+            this.blinkDirection = 0;
+        }
+
+        if (speakingMotionActive && !this.isDragging) {
+            this.position.x += this.velocity.x * deltaSeconds;
+            this.position.y += this.velocity.y * deltaSeconds * 0.25;
+
+            const speed = Math.max(this.minSpeed, Math.min(this.maxSpeed, Math.hypot(this.velocity.x, this.velocity.y)));
+            this.walkPhase += deltaSeconds * (speed / 70);
+
+            if (Math.abs(this.velocity.x) > 1) {
+                this.facing = this.velocity.x >= 0 ? 1 : -1;
+            }
+
+            const bounced = this.keepInBounds();
+            if (bounced) {
+                this.pickNewDirection();
+            }
+
+            if (!this.nextDirectionChangeAt || timestamp >= this.nextDirectionChangeAt) {
+                this.pickNewDirection();
+            }
+        }
+
+        this.updateLookOffset();
+        this.draw(timestamp);
+    }
+
+    updateBlink(deltaSeconds, timestamp) {
+        if (this.blinkDirection === 0 && timestamp >= this.nextBlinkAt) {
+            this.blinkDirection = 1;
+        }
+
+        if (this.blinkDirection === 0) {
+            return;
+        }
+
+        this.blinkAmount += this.blinkDirection * deltaSeconds * 8;
+
+        if (this.blinkAmount >= 1) {
+            this.blinkAmount = 1;
+            this.blinkDirection = -1;
+        } else if (this.blinkAmount <= 0) {
+            this.blinkAmount = 0;
+            this.blinkDirection = 0;
+            this.nextBlinkAt = timestamp + 1400 + Math.random() * 3200;
+        }
+    }
+
+    updateLookOffset() {
+        if (this.status !== 'speaking') {
+            this.lookOffset.x = 0;
+            this.lookOffset.y = 0;
+            return;
+        }
+
+        if (this.pointer.active) {
+            const dx = this.pointer.x - this.position.x;
+            const dy = this.pointer.y - (this.position.y - 224);
+            this.lookOffset.x = this.clamp(dx / 26, -7, 7);
+            this.lookOffset.y = this.clamp(dy / 40, -5, 5);
+            return;
+        }
+
+        this.lookOffset.x = this.clamp((this.velocity.x / this.maxSpeed) * 5.5, -5.5, 5.5);
+        this.lookOffset.y = this.status === 'listening' ? -1.2 : 0.8;
+    }
+
+    pickNewDirection(forceSpeedBoost = false) {
+        const speedFloor = forceSpeedBoost ? this.maxSpeed * 0.9 : this.minSpeed;
+        const speed = speedFloor + Math.random() * (this.maxSpeed - speedFloor);
+        const angle = Math.random() * Math.PI * 2;
+
+        this.velocity.x = Math.cos(angle) * speed;
+        this.velocity.y = Math.sin(angle) * speed * 0.65;
+        this.facing = this.velocity.x >= 0 ? 1 : -1;
+        this.nextDirectionChangeAt = performance.now() + 2200 + Math.random() * 3200;
+    }
+
+    keepInBounds(forceRender = false) {
+        const { width: stageWidth, height: stageHeight } = this.getStageSize();
+        const halfRobotWidth = this.robotSize.width * 0.5;
+        const minX = halfRobotWidth + this.stagePadding;
+        const maxX = stageWidth - halfRobotWidth - this.stagePadding;
+        const minY = Math.max(this.robotSize.height * 0.72, stageHeight * 0.48);
+        const maxY = stageHeight - 16;
+
+        if (maxX <= minX) {
+            this.position.x = stageWidth / 2;
+        }
+
+        let bounced = false;
+
+        if (this.position.x < minX) {
+            this.position.x = minX;
+            this.velocity.x = Math.abs(this.velocity.x);
+            this.facing = 1;
+            bounced = true;
+        } else if (maxX > minX && this.position.x > maxX) {
+            this.position.x = maxX;
+            this.velocity.x = -Math.abs(this.velocity.x);
+            this.facing = -1;
+            bounced = true;
+        }
+
+        if (this.position.y < minY) {
+            this.position.y = minY;
+            this.velocity.y = Math.abs(this.velocity.y);
+            bounced = true;
+        } else if (this.position.y > maxY) {
+            this.position.y = maxY;
+            this.velocity.y = -Math.abs(this.velocity.y);
+            bounced = true;
+        }
+
+        if (forceRender && !this.animationFrameId) {
+            this.draw(performance.now());
+        }
+
+        return bounced;
+    }
+
+    getPointerPosition(event) {
+        const rect = this.stageEl.getBoundingClientRect();
+        return {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top
+        };
+    }
+
+    isPointInsideRobot(point) {
+        const halfWidth = this.robotSize.width * 0.48;
+        const top = this.position.y - this.robotSize.height;
+        const bottom = this.position.y + 14;
+        return point.x >= (this.position.x - halfWidth) &&
+            point.x <= (this.position.x + halfWidth) &&
+            point.y >= top &&
+            point.y <= bottom;
+    }
+
+    handlePointerDown(event) {
+        if (event.button !== 0) {
+            return;
+        }
+
+        const point = this.getPointerPosition(event);
+        this.pointer.active = true;
+        this.pointer.x = point.x;
+        this.pointer.y = point.y;
+
+        if (!this.isPointInsideRobot(point)) {
+            return;
+        }
+
+        this.isDragging = true;
+        this.dragPointerId = event.pointerId;
+        this.stageEl.classList.add('dragging');
+        if (this.stageEl.setPointerCapture) {
+            this.stageEl.setPointerCapture(event.pointerId);
+        }
+
+        this.dragOffset.x = point.x - this.position.x;
+        this.dragOffset.y = point.y - this.position.y;
+        this.lastDragSample = {
+            x: point.x,
+            y: point.y,
+            time: performance.now()
+        };
+        this.dragVelocity.x = 0;
+        this.dragVelocity.y = 0;
+
+        event.preventDefault();
+    }
+
+    handlePointerMove(event) {
+        const point = this.getPointerPosition(event);
+        this.pointer.active = true;
+        this.pointer.x = point.x;
+        this.pointer.y = point.y;
+
+        if (!this.isDragging || event.pointerId !== this.dragPointerId) {
+            return;
+        }
+
+        const now = performance.now();
+        if (this.lastDragSample) {
+            const elapsed = Math.max(16, now - this.lastDragSample.time);
+            this.dragVelocity.x = ((point.x - this.lastDragSample.x) / elapsed) * 1000;
+            this.dragVelocity.y = ((point.y - this.lastDragSample.y) / elapsed) * 1000;
+        }
+        this.lastDragSample = { x: point.x, y: point.y, time: now };
+
+        this.position.x = point.x - this.dragOffset.x;
+        this.position.y = point.y - this.dragOffset.y;
+        this.keepInBounds();
+    }
+
+    handlePointerUp(event) {
+        if (!this.isDragging || event.pointerId !== this.dragPointerId) {
+            this.pointer.active = false;
+            return;
+        }
+
+        this.isDragging = false;
+        this.stageEl.classList.remove('dragging');
+        this.pointer.active = false;
+        if (this.stageEl.releasePointerCapture) {
+            this.stageEl.releasePointerCapture(event.pointerId);
+        }
+        this.dragPointerId = null;
+        this.lastDragSample = null;
+
+        this.velocity.x = this.clamp(this.dragVelocity.x, -this.maxSpeed * 1.05, this.maxSpeed * 1.05);
+        this.velocity.y = this.clamp(this.dragVelocity.y * 0.45, -this.maxSpeed * 0.6, this.maxSpeed * 0.6);
+
+        if (Math.hypot(this.velocity.x, this.velocity.y) < 20) {
+            this.pickNewDirection();
+        } else {
+            this.nextDirectionChangeAt = performance.now() + 1800 + Math.random() * 2200;
+            this.facing = this.velocity.x >= 0 ? 1 : -1;
+        }
+    }
+
+    setAudioState(status) {
+        if (!this.isAvailable || !status) {
+            return;
+        }
+
+        const statusChanged = this.status !== status;
+        this.status = status;
+
+        this.setStatusBadge(status);
+
+        if (!statusChanged) {
+            return;
+        }
+
+        if (status === 'speaking') {
+            this.pickNewDirection();
+        } else {
+            this.energy = 0;
+        }
+    }
+
+    setStatusBadge(status) {
+        if (!this.stateBadgeEl) {
+            return;
+        }
+
+        this.stateBadgeEl.className = `robot-state ${status}`;
+
+        switch (status) {
+            case 'listening':
+                this.stateBadgeEl.textContent = 'Listening';
+                break;
+            case 'processing':
+                this.stateBadgeEl.textContent = 'Processing';
+                break;
+            case 'generating':
+                this.stateBadgeEl.textContent = 'Generating';
+                break;
+            case 'speaking':
+                this.stateBadgeEl.textContent = 'Speaking';
+                break;
+            case 'error':
+                this.stateBadgeEl.textContent = 'Error';
+                break;
+            default:
+                this.stateBadgeEl.textContent = 'Idle';
+                break;
+        }
+    }
+
+    setSpeechEnergy(level) {
+        if (!this.isAvailable || this.status !== 'speaking') {
+            return;
+        }
+
+        const clampedLevel = Math.max(0, Math.min(1, level));
+        this.energy = Math.max(this.energy, clampedLevel);
+    }
+
+    clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    pointFrom(x, y, angle, distance) {
+        return {
+            x: x + Math.cos(angle) * distance,
+            y: y + Math.sin(angle) * distance
+        };
+    }
+
+    draw(timestamp) {
+        if (!this.isAvailable) {
+            return;
+        }
+
+        this.resizeCanvasIfNeeded();
+        const { width, height } = this.getStageSize();
+        this.ctx.clearRect(0, 0, width, height);
+
+        const speed = Math.hypot(this.velocity.x, this.velocity.y);
+        const movingIntensity = (this.status === 'speaking' && !this.prefersReducedMotion.matches)
+            ? this.clamp(speed / this.maxSpeed, 0, 1)
+            : 0;
+
+        const bobWave = Math.sin(this.walkPhase * 1.8);
+        let bob = bobWave * (1 + movingIntensity * 1.8);
+        if (this.status === 'speaking') {
+            bob += Math.sin(this.talkPhase) * (0.5 + this.energy * 1.7);
+        }
+
+        const pose = {
+            talk: this.computeTalkAmount(),
+            blink: this.blinkAmount,
+            walk: movingIntensity,
+            bob,
+            headTilt: this.computeHeadTilt(),
+            leftArmWave: this.computeLeftArmWave(),
+            eyeOffsetX: this.lookOffset.x,
+            eyeOffsetY: this.lookOffset.y,
+            timestamp
+        };
+
+        this.drawRobot(this.position.x, this.position.y + bob, pose);
+    }
+
+    computeTalkAmount() {
+        if (this.status !== 'speaking') {
+            return 0;
+        }
+
+        const oscillation = (Math.sin(this.talkPhase) + 1) * 0.5;
+        return this.clamp(0.12 + (this.energy * 0.42) + (oscillation * 0.16), 0.1, 0.65);
+    }
+
+    computeHeadTilt() {
+        if (this.prefersReducedMotion.matches || this.status !== 'speaking') {
+            return 0;
+        }
+
+        const base = this.clamp((this.velocity.x / this.maxSpeed) * 0.04, -0.04, 0.04);
+        return base + (Math.sin(this.talkPhase * 0.6) * 0.04) + (this.energy * 0.04);
+    }
+
+    computeLeftArmWave() {
+        if (this.prefersReducedMotion.matches || this.status !== 'speaking') {
+            return 0;
+        }
+
+        return Math.sin(this.gesturePhase * 0.55) * 0.35;
+    }
+
+    drawRobot(anchorX, anchorY, pose) {
+        const ctx = this.ctx;
+        const walkPhase = this.walkPhase;
+        const leftStep = Math.sin(walkPhase);
+        const rightStep = Math.sin(walkPhase + Math.PI);
+        const leftLift = Math.max(0, leftStep) * 10 * pose.walk;
+        const rightLift = Math.max(0, rightStep) * 10 * pose.walk;
+
+        const shadowWidth = 50 - (pose.walk * 4) + (Math.abs(pose.bob) * 0.1);
+
+        ctx.save();
+        ctx.translate(anchorX, anchorY);
+        ctx.scale(this.facing, 1);
+
+        ctx.fillStyle = 'rgba(45, 28, 18, 0.28)';
+        ctx.beginPath();
+        ctx.ellipse(0, 8, shadowWidth, 12, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        const leftLeg = {
+            hipX: -24,
+            hipY: -98,
+            kneeX: -28 + (leftStep * 8 * pose.walk),
+            kneeY: -50 - leftLift,
+            ankleX: -30 + (leftStep * 16 * pose.walk),
+            ankleY: -8 - (leftLift * 0.3)
+        };
+        const rightLeg = {
+            hipX: 24,
+            hipY: -98,
+            kneeX: 28 + (rightStep * 8 * pose.walk),
+            kneeY: -50 - rightLift,
+            ankleX: 30 + (rightStep * 16 * pose.walk),
+            ankleY: -8 - (rightLift * 0.3)
+        };
+
+        this.drawMetalTube(leftLeg.hipX, leftLeg.hipY, leftLeg.kneeX, leftLeg.kneeY, 15);
+        this.drawMetalTube(leftLeg.kneeX, leftLeg.kneeY, leftLeg.ankleX, leftLeg.ankleY, 13);
+        this.drawFoot(leftLeg.ankleX - 4, 1 - (leftLift * 0.2));
+
+        this.drawMetalTube(rightLeg.hipX, rightLeg.hipY, rightLeg.kneeX, rightLeg.kneeY, 15);
+        this.drawMetalTube(rightLeg.kneeX, rightLeg.kneeY, rightLeg.ankleX, rightLeg.ankleY, 13);
+        this.drawFoot(rightLeg.ankleX + 4, 1 - (rightLift * 0.2));
+
+        this.drawRoundedRect(-18, -110, 36, 14, 7, '#5d5d5f', '#1c1c1d', 3);
+        this.drawRoundedRect(-58, -188, 116, 98, 16, '#f2e8d8', '#202020', 4);
+        this.drawRoundedRect(-52, -121, 104, 34, 12, '#f5ede0', '#202020', 3);
+
+        const shoulderY = -160;
+        const leftShoulderX = -57;
+        const rightShoulderX = 57;
+
+        const leftUpperAngle = Math.PI + (pose.leftArmWave * 0.42) - 0.1;
+        const leftElbow = this.pointFrom(leftShoulderX, shoulderY, leftUpperAngle, 42);
+        const leftLowerAngle = leftUpperAngle + 0.8 + (Math.sin(this.gesturePhase * 1.45) * 0.28);
+        const leftHand = this.pointFrom(leftElbow.x, leftElbow.y, leftLowerAngle, 38);
+        this.drawMetalTube(leftShoulderX, shoulderY, leftElbow.x, leftElbow.y, 13);
+        this.drawMetalTube(leftElbow.x, leftElbow.y, leftHand.x, leftHand.y, 11);
+        this.drawOpenHand(leftHand.x, leftHand.y, 15);
+
+        const headYOffset = -236;
+        const headBob = this.status === 'speaking'
+            ? Math.sin(this.talkPhase * 0.65) * 1.5
+            : 0;
+        const microphoneAnchor = {
+            x: 44,
+            y: headYOffset + 34 + (headBob * 0.25)
+        };
+
+        const rightElbow = {
+            x: 78,
+            y: -130 + Math.sin(this.gesturePhase * 0.3) * (this.status === 'speaking' ? 2.5 : 0)
+        };
+        const rightHand = {
+            x: microphoneAnchor.x,
+            y: microphoneAnchor.y + 16
+        };
+
+        this.drawMetalTube(rightShoulderX, shoulderY, rightElbow.x, rightElbow.y, 13);
+        this.drawMetalTube(rightElbow.x, rightElbow.y, rightHand.x, rightHand.y, 11);
+        this.drawClosedHand(rightHand.x, rightHand.y, 12);
+
+        this.drawMicrophone(microphoneAnchor.x + 12, microphoneAnchor.y + 14);
+
+        ctx.strokeStyle = '#252525';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(microphoneAnchor.x + 20, microphoneAnchor.y + 30);
+        ctx.bezierCurveTo(74, -86, 72, -10, 62, 16);
+        ctx.stroke();
+
+        ctx.save();
+        ctx.translate(0, headYOffset + headBob);
+        ctx.rotate(pose.headTilt);
+
+        ctx.strokeStyle = '#2a2a2a';
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(0, -58);
+        ctx.lineTo(0, -82);
+        ctx.stroke();
+        ctx.fillStyle = '#88a253';
+        ctx.beginPath();
+        ctx.arc(0, -86, 7.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#2a2a2a';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        this.drawRoundedRect(-66, -58, 132, 98, 20, '#f6efdf', '#202020', 4);
+        this.drawRoundedRect(-58, -49, 116, 80, 14, '#faf5ea', '#202020', 3);
+
+        ctx.fillStyle = '#555';
+        ctx.beginPath();
+        ctx.arc(-70, -8, 15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(70, -8, 15, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        this.drawEye(-24, -8, pose.blink, pose.eyeOffsetX, pose.eyeOffsetY);
+        this.drawEye(24, -8, pose.blink, pose.eyeOffsetX, pose.eyeOffsetY);
+
+        const mouthHeight = 14 + (pose.talk * 21);
+        const mouthTop = 12;
+        this.drawRoundedRect(-30, mouthTop, 60, mouthHeight, 12, '#242424', '#111', 2);
+        this.drawRoundedRect(-26, mouthTop + 2, 52, 8, 4, '#fefefe', '#1f1f1f', 1.5);
+
+        ctx.fillStyle = '#d65133';
+        ctx.beginPath();
+        ctx.ellipse(0, mouthTop + mouthHeight - 6, 14, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+        ctx.restore();
+    }
+
+    drawEye(centerX, centerY, blinkAmount, eyeOffsetX, eyeOffsetY) {
+        const ctx = this.ctx;
+        const eyelid = this.clamp(blinkAmount * 0.95, 0, 0.95);
+        const eyeHeight = Math.max(3, 17 * (1 - eyelid));
+        const irisHeight = Math.max(2.5, 14 * (1 - eyelid));
+
+        ctx.fillStyle = '#9cb861';
+        ctx.beginPath();
+        ctx.ellipse(centerX, centerY, 18, irisHeight, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        ctx.fillStyle = '#242424';
+        ctx.beginPath();
+        ctx.ellipse(centerX + eyeOffsetX * 0.45, centerY + eyeOffsetY * 0.45, 6, Math.max(2, eyeHeight * 0.35), 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(35, 35, 35, 0.75)';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY - 24, 14, Math.PI * 0.1, Math.PI * 0.95);
+        ctx.stroke();
+    }
+
+    drawFoot(centerX, floorY) {
+        const ctx = this.ctx;
+        ctx.fillStyle = '#f3ead9';
+        ctx.beginPath();
+        ctx.ellipse(centerX, floorY, 24, 12, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#202020';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+    }
+
+    drawOpenHand(centerX, centerY, radius) {
+        const ctx = this.ctx;
+        ctx.fillStyle = '#f4ead9';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#202020';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        for (let i = 0; i < 4; i++) {
+            const angle = -1.1 + (i * 0.42);
+            const start = this.pointFrom(centerX, centerY, angle, radius * 0.35);
+            const end = this.pointFrom(centerX, centerY, angle, radius * 1.05);
+            ctx.beginPath();
+            ctx.moveTo(start.x, start.y);
+            ctx.lineTo(end.x, end.y);
+            ctx.stroke();
+        }
+    }
+
+    drawClosedHand(centerX, centerY, radius) {
+        const ctx = this.ctx;
+        ctx.fillStyle = '#f4ead9';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius * 0.75, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#202020';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+    }
+
+    drawMicrophone(centerX, centerY) {
+        const ctx = this.ctx;
+
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate(-0.34);
+
+        this.drawRoundedRect(-11, -9, 18, 26, 7, '#171717', '#080808', 2.5);
+        ctx.strokeStyle = '#434343';
+        ctx.lineWidth = 1;
+        for (let y = -4; y <= 12; y += 4) {
+            ctx.beginPath();
+            ctx.moveTo(-9, y);
+            ctx.lineTo(5, y);
+            ctx.stroke();
+        }
+
+        this.drawRoundedRect(-4, 12, 8, 24, 3, '#262626', '#111', 2);
+        ctx.restore();
+    }
+
+    drawMetalTube(x1, y1, x2, y2, thickness) {
+        const ctx = this.ctx;
+
+        ctx.strokeStyle = '#7f8082';
+        ctx.lineCap = 'round';
+        ctx.lineWidth = thickness;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#2a2a2b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        const length = Math.hypot(x2 - x1, y2 - y1);
+        const rings = Math.max(2, Math.floor(length / 10));
+        const normalX = (y1 - y2) / (length || 1);
+        const normalY = (x2 - x1) / (length || 1);
+
+        ctx.strokeStyle = '#3c3c3d';
+        ctx.lineWidth = 1.5;
+        for (let i = 1; i < rings; i++) {
+            const t = i / rings;
+            const px = x1 + (x2 - x1) * t;
+            const py = y1 + (y2 - y1) * t;
+            ctx.beginPath();
+            ctx.moveTo(px + normalX * (thickness * 0.46), py + normalY * (thickness * 0.46));
+            ctx.lineTo(px - normalX * (thickness * 0.46), py - normalY * (thickness * 0.46));
+            ctx.stroke();
+        }
+    }
+
+    drawRoundedRect(x, y, width, height, radius, fillColor, strokeColor = null, lineWidth = 1) {
+        const ctx = this.ctx;
+        const r = Math.max(0, Math.min(radius, Math.min(width, height) * 0.5));
+
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + width, y, x + width, y + height, r);
+        ctx.arcTo(x + width, y + height, x, y + height, r);
+        ctx.arcTo(x, y + height, x, y, r);
+        ctx.arcTo(x, y, x + width, y, r);
+        ctx.closePath();
+
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+
+        if (strokeColor) {
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = lineWidth;
+            ctx.stroke();
+        }
+    }
+}
+
 class BriAIClient {
     constructor() {
         this.isConnected = false;
@@ -14,6 +818,9 @@ class BriAIClient {
         this.animationId = null;
         this.audioProcessor = null;
         this.silentGainNode = null;
+        this.playbackGainNode = null;
+        this.playbackAnalyser = null;
+        this.playbackDataArray = null;
 
         // WebSocket connection
         this.ws = null;
@@ -23,6 +830,7 @@ class BriAIClient {
         this.audioQueue = [];
         this.isPlayingAudio = false;
         this.currentAudioTime = 0;
+        this.pendingIdleAfterPlayback = false;
 
         // Connection recovery
         this.reconnectAttempts = 0;
@@ -45,6 +853,7 @@ class BriAIClient {
         // Audio buffer tracking
         this.audioBufferStartTime = null;
         this.minAudioDuration = 150; // Minimum 150ms of audio before committing
+        this.serverVADManagedTurns = true; // Server VAD handles commit/response lifecycle
 
         // Prevent duplicate responses
         this.lastResponseTime = 0;
@@ -83,6 +892,11 @@ class BriAIClient {
         this.errorMessage = document.getElementById('error-message');
         this.retryBtn = document.getElementById('retry-btn');
         this.audioStatus = document.getElementById('audio-status');
+        this.debugLog = document.getElementById('debug-log');
+        this.robotCompanion = new RobotCompanion({
+            stageEl: document.getElementById('robot-stage'),
+            canvasEl: document.getElementById('robot-canvas')
+        });
 
         this.initializeEventListeners();
         this.logDebug('BriAI Client initialized');
@@ -262,6 +1076,8 @@ class BriAIClient {
                     this.logDebug(`WebSocket closed: ${event.code} - ${event.reason}`);
 
                     if (this.isConnected || this.isConnecting) {
+                        let shouldCleanup = true;
+
                         // Handle different close codes with appropriate user feedback
                         if (event.code === 1000) {
                             // Normal closure
@@ -273,6 +1089,8 @@ class BriAIClient {
                             this.setConnectionStatus('reconnecting');
                             this.setAudioStatus('idle');
                             this.logTranscription('System: Connection lost unexpectedly. Attempting to reconnect...', 'system');
+                            this.stopHeartbeat();
+                            shouldCleanup = false;
                             this.attemptReconnection();
                         } else if (event.code === 1011) {
                             // Server error
@@ -307,8 +1125,8 @@ class BriAIClient {
                             this.showErrorMessage(`Connection failed (Code: ${event.code}). Please try reconnecting.`, true);
                         }
 
-                        // Only cleanup if this wasn't a normal closure during reconnection
-                        if (event.code !== 1000 || !this.reconnectTimer) {
+                        // Reconnection flow performs cleanup inside attemptReconnection().
+                        if (shouldCleanup) {
                             this.cleanup();
                         }
                     }
@@ -366,6 +1184,18 @@ class BriAIClient {
 
             const bufferLength = this.analyser.fftSize;
             this.dataArray = new Uint8Array(bufferLength);
+
+            // Route assistant playback through an analyser for visual speech sync
+            this.playbackGainNode = this.audioContext.createGain();
+            this.playbackGainNode.gain.value = 1;
+
+            this.playbackAnalyser = this.audioContext.createAnalyser();
+            this.playbackAnalyser.fftSize = 256;
+            this.playbackAnalyser.smoothingTimeConstant = 0.15;
+            this.playbackDataArray = new Uint8Array(this.playbackAnalyser.fftSize);
+
+            this.playbackGainNode.connect(this.playbackAnalyser);
+            this.playbackAnalyser.connect(this.audioContext.destination);
 
             // Set up audio processing for sending to backend
             await this.setupAudioProcessor(source);
@@ -481,15 +1311,20 @@ class BriAIClient {
 
             try {
                 this.analyser.getByteTimeDomainData(this.dataArray);
-
-                // Calculate RMS (Root Mean Square) for audio level detection
-                let sum = 0;
-                for (let i = 0; i < this.dataArray.length; i++) {
-                    const sample = (this.dataArray[i] - 128) / 128; // Convert to -1 to 1 range
-                    sum += sample * sample;
+                let playbackRms = 0;
+                if (this.playbackAnalyser && this.playbackDataArray && this.isPlayingAudio) {
+                    this.playbackAnalyser.getByteTimeDomainData(this.playbackDataArray);
+                    let playbackSum = 0;
+                    for (let i = 0; i < this.playbackDataArray.length; i++) {
+                        const sample = (this.playbackDataArray[i] - 128) / 128;
+                        playbackSum += sample * sample;
+                    }
+                    playbackRms = Math.sqrt(playbackSum / this.playbackDataArray.length);
                 }
-                const rms = Math.sqrt(sum / this.dataArray.length);
-                const volumePercent = Math.min(100, rms * 100 * 3); // Scale and cap at 100%
+
+                if (this.robotCompanion && this.isPlayingAudio) {
+                    this.robotCompanion.setSpeechEnergy(Math.min(1, playbackRms * 4.5));
+                }
 
                 // Continue monitoring if still connected (for internal audio processing)
                 if (this.isConnected) {
@@ -548,6 +1383,9 @@ class BriAIClient {
 
             case 'session.updated':
                 this.logDebug('OpenAI session updated');
+                if (event.session && event.session.turn_detection && event.session.turn_detection.type !== 'server_vad') {
+                    this.serverVADManagedTurns = false;
+                }
                 break;
 
             case 'conversation.item.input_audio_transcription.completed':
@@ -571,8 +1409,12 @@ class BriAIClient {
 
             case 'response.audio.done':
                 this.logDebug('Audio response completed');
-                // Reset audio timing for next response
-                this.currentAudioTime = this.audioContext.currentTime;
+                // Keep speaking animation active while queued audio is still playing.
+                this.pendingIdleAfterPlayback = this.isPlayingAudio || this.audioQueue.length > 0;
+                if (!this.pendingIdleAfterPlayback) {
+                    this.setAudioStatus('idle');
+                    this.currentAudioTime = this.audioContext.currentTime;
+                }
                 break;
 
             case 'response.audio.delta':
@@ -595,6 +1437,16 @@ class BriAIClient {
                 const audioDuration = this.audioBufferStartTime ? Date.now() - this.audioBufferStartTime : 0;
                 this.logDebug(`Audio duration: ${audioDuration}ms`);
 
+                if (this.serverVADManagedTurns) {
+                    if (audioDuration >= this.minAudioDuration) {
+                        this.setAudioStatus('processing');
+                    } else {
+                        this.setAudioStatus('idle');
+                    }
+                    this.audioBufferStartTime = null;
+                    break;
+                }
+
                 // Only commit if we have enough audio and not already generating a response
                 if (!this.isGeneratingResponse && audioDuration >= this.minAudioDuration) {
                     this.setAudioStatus('processing');
@@ -616,6 +1468,12 @@ class BriAIClient {
 
             case 'input_audio_buffer.committed':
                 this.logDebug('Audio buffer committed, generating response');
+
+                if (this.serverVADManagedTurns) {
+                    this.isGeneratingResponse = true;
+                    this.setAudioStatus('generating');
+                    break;
+                }
 
                 // Prevent duplicate responses with debouncing
                 const now = Date.now();
@@ -644,10 +1502,17 @@ class BriAIClient {
 
             case 'response.done':
                 this.logDebug('Response completed');
-                this.setAudioStatus('idle');
                 this.isGeneratingResponse = false;
-                // Reset audio timing for next response
-                this.currentAudioTime = this.audioContext.currentTime;
+
+                // Hold "speaking" until the playback queue has finished.
+                if (this.isPlayingAudio || this.audioQueue.length > 0) {
+                    this.pendingIdleAfterPlayback = true;
+                    this.setAudioStatus('speaking');
+                } else {
+                    this.pendingIdleAfterPlayback = false;
+                    this.setAudioStatus('idle');
+                    this.currentAudioTime = this.audioContext.currentTime;
+                }
 
                 // Track token usage if available
                 if (event.response && event.response.usage) {
@@ -744,8 +1609,15 @@ class BriAIClient {
             // Convert to Float32Array for Web Audio API
             const pcm16 = new Int16Array(bytes.buffer);
             const float32 = new Float32Array(pcm16.length);
+            let energyAccumulator = 0;
             for (let i = 0; i < pcm16.length; i++) {
                 float32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
+                energyAccumulator += float32[i] * float32[i];
+            }
+
+            if (this.robotCompanion && this.audioStatus && this.audioStatus.classList.contains('speaking')) {
+                const chunkRms = Math.sqrt(energyAccumulator / float32.length);
+                this.robotCompanion.setSpeechEnergy(Math.min(1, chunkRms * 4.5));
             }
 
             // Create audio buffer
@@ -772,6 +1644,10 @@ class BriAIClient {
         if (this.audioQueue.length === 0) {
             this.isPlayingAudio = false;
             this.currentAudioTime = this.audioContext.currentTime;
+            if (this.pendingIdleAfterPlayback) {
+                this.pendingIdleAfterPlayback = false;
+                this.setAudioStatus('idle');
+            }
             return;
         }
 
@@ -781,7 +1657,11 @@ class BriAIClient {
 
         const source = this.audioContext.createBufferSource();
         source.buffer = audioBuffer;
-        source.connect(this.audioContext.destination);
+        if (this.playbackGainNode) {
+            source.connect(this.playbackGainNode);
+        } else {
+            source.connect(this.audioContext.destination);
+        }
 
         // Calculate when to start this chunk for seamless playback
         const startTime = Math.max(this.audioContext.currentTime, this.currentAudioTime);
@@ -939,6 +1819,9 @@ class BriAIClient {
         if (!this.audioStatus) return;
 
         this.audioStatus.className = `audio-status ${status}`;
+        if (this.robotCompanion) {
+            this.robotCompanion.setAudioState(status);
+        }
 
         switch (status) {
             case 'idle':
@@ -991,6 +1874,11 @@ class BriAIClient {
     }
 
     async attemptReconnection() {
+        if (this.reconnectTimer) {
+            this.logDebug('Reconnection already scheduled, skipping duplicate attempt');
+            return;
+        }
+
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.logError('Maximum reconnection attempts reached');
             this.setConnectionStatus('error');
@@ -1012,6 +1900,7 @@ class BriAIClient {
         this.reconnectTimer = setTimeout(async () => {
             try {
                 this.logDebug('Attempting to reconnect...');
+                this.reconnectTimer = null;
 
                 // Clean up current connection state
                 this.cleanup();
@@ -1030,6 +1919,7 @@ class BriAIClient {
 
             } catch (error) {
                 this.logError('Reconnection failed', error);
+                this.reconnectTimer = null;
 
                 // Try again if we haven't reached max attempts
                 if (this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -1172,25 +2062,29 @@ class BriAIClient {
     logError(message, error = null) {
         const errorMessage = error ? `${message}: ${error.message || error}` : message;
 
-        const entry = document.createElement('div');
-        entry.className = 'log-entry error';
+        if (this.debugLog) {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry error';
 
-        // Create elements safely to prevent XSS
-        const timestamp = document.createElement('span');
-        timestamp.className = 'timestamp';
-        timestamp.textContent = this.getTimestamp();
+            // Create elements safely to prevent XSS
+            const timestamp = document.createElement('span');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = this.getTimestamp();
 
-        entry.appendChild(timestamp);
-        entry.appendChild(document.createTextNode(`ERROR: ${errorMessage}`));
+            entry.appendChild(timestamp);
+            entry.appendChild(document.createTextNode(`ERROR: ${errorMessage}`));
 
-        // Remove placeholder if it exists
-        const placeholder = this.debugLog.querySelector('.placeholder');
-        if (placeholder) {
-            placeholder.remove();
+            // Remove placeholder if it exists
+            const placeholder = this.debugLog.querySelector('.placeholder');
+            if (placeholder) {
+                placeholder.remove();
+            }
+
+            this.debugLog.appendChild(entry);
+            this.scrollToBottom(this.debugLog);
         }
 
-        this.debugLog.appendChild(entry);
-        this.scrollToBottom(this.debugLog);
+        this.sendDebugToAdmin(errorMessage, 'error');
 
         // Also log to console for development (safe format string)
         console.error('[BriAI]', errorMessage, error);
@@ -1302,6 +2196,7 @@ class BriAIClient {
         this.audioQueue = [];
         this.isPlayingAudio = false;
         this.currentAudioTime = 0;
+        this.pendingIdleAfterPlayback = false;
 
         // Reset response generation state
         this.isGeneratingResponse = false;
@@ -1348,6 +2243,24 @@ class BriAIClient {
             this.silentGainNode = null;
         }
 
+        if (this.playbackAnalyser) {
+            try {
+                this.playbackAnalyser.disconnect();
+            } catch (error) {
+                this.logDebug('Error disconnecting playback analyser:', error);
+            }
+            this.playbackAnalyser = null;
+        }
+
+        if (this.playbackGainNode) {
+            try {
+                this.playbackGainNode.disconnect();
+            } catch (error) {
+                this.logDebug('Error disconnecting playback gain:', error);
+            }
+            this.playbackGainNode = null;
+        }
+
         // Stop media stream tracks
         if (this.mediaStream) {
             this.mediaStream.getTracks().forEach(track => {
@@ -1373,11 +2286,16 @@ class BriAIClient {
         // Reset analyser
         this.analyser = null;
         this.dataArray = null;
+        this.playbackDataArray = null;
 
         // Reset audio processing states
         this.isListening = false;
         this.isProcessing = false;
         this.isSpeaking = false;
+
+        if (this.robotCompanion) {
+            this.robotCompanion.setAudioState('idle');
+        }
 
         this.logDebug('Cleanup completed');
     }
